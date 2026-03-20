@@ -1,0 +1,11 @@
+Cert/
+Doc/
+Backup/
+Log/
+Models3d
+SimuResult
+TessngLib/
+venv/
+.idea/
+__pycache__/
+WorkSpace/
