@@ -108,6 +108,7 @@ class TessAutoPyInterface(object):
 			self.mainVehiclePtrDict[avName] = avVehiclePtr
 
 			print(f"avName->{avName}, avTessngId->{mainVehiId}, succeed to create av, point is [{state.x}, {-state.y}]")
+			self.alreadyLaunchedAvIdSet.add(mainVehiId)
 			return False
 
 		return True
