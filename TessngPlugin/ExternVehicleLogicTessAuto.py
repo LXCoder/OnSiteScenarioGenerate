@@ -59,7 +59,7 @@ class TessAutoPyInterface(object):
 		vs.vehiStableStatus.height = state.height / 100
 
 		vs.vehiDynaStatus.x = state.x
-		vs.vehiDynaStatus.y = -state.y
+		vs.vehiDynaStatus.y = state.y
 		vs.vehiDynaStatus.speed = state.speed
 		vs.vehiDynaStatus.angle = state.heading
 
