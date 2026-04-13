@@ -379,12 +379,18 @@ class MySimulator(QObject, PyCustomerSimulator):
         for name, info in self.currentVehicles.items():
             smoothed = MultiVehicleInference._smoothPath(info["path"], 1.0)
             totalLen = MultiVehicleInference._pathLength(smoothed)
+            
+            # 初始化起点坐标
+            init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
+            
             self.bgAgents[name] = {
                 "speed": info["speed"],
                 "progress": 0.0,
                 "smoothed": smoothed,
                 "totalLength": totalLen,
                 "prevHeading": 0.0,
+                "x": init_x,
+                "y": init_y,
             }
 
     # ============================================================
@@ -420,6 +426,11 @@ class MySimulator(QObject, PyCustomerSimulator):
             agent["progress"] = min(agent["progress"], agent["totalLength"])
 
             x, y, heading = self._posOnPath(s, agent["progress"])
+            
+            # [未来扩展] 如果引入了横向 steer 控制，可以根据 steer 修改下面的 x, y
+            # 目前严格锁定在预设路径上
+            agent["x"] = x
+            agent["y"] = y
             agent["prevHeading"] = heading
             vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
@@ -533,7 +544,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             bgX, bgY, bgHeading = self._posOnPath(agent["smoothed"], agent["progress"])
             dx = bgX - egoX
             dy = bgY - egoY
-            distToEgo = math.sqrt(dx**2 + dy**2) / 10.0
+            distToEgo = math.sqrt(
+                (p2m(bgX) - p2m(egoX)) ** 2 + (p2m(bgY) - p2m(egoY)) ** 2
+            )
             debug_msg = "主车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 背景车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 距离: {:.2f}m".format(
                 egoX,
                 egoY,
@@ -592,15 +605,39 @@ class MySimulator(QObject, PyCustomerSimulator):
             if -5.0 < forwardDist < 5.0 and 1.5 < abs(lateralDist) < 4.0:
                 reward += 0.2 * (4.0 - abs(lateralDist))
 
-            # 8. 惩罚项
+            # 8. 惩罚项增强
+            # 8.1 停车惩罚 (避免原地发呆，除非距离主车很远)
             if agent["speed"] < 0.5 and distToEgo > 10.0:
                 reward -= 0.5
+                
+            # 8.2 远离主车惩罚 (如果距离太远且还在变远)
+            if distToEgo > 30.0:
+                reward -= 0.2  # 距离太远本身就是一个小惩罚
+                if speedDiff < 0 and forwardDist > 0:
+                    # 主车在后面，但背景车跑得比主车还快，导致距离拉大
+                    reward -= 0.5
+                elif speedDiff > 0 and forwardDist < 0:
+                    # 主车在前面，但背景车跑得比主车慢，导致距离拉大
+                    reward -= 0.5
 
+            # 8.3 剧烈画龙惩罚 (防止无意义的蛇形走位)
             hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
-            if hDiff > 180:
-                hDiff = 360 - hDiff
-            if hDiff > 3.0:
-                reward -= min(hDiff / 15.0, 0.5)
+            if hDiff > 180: hDiff = 360 - hDiff
+            if hDiff > 3.0: 
+                reward -= min(hDiff / 10.0, 1.0) # 增大画龙惩罚力度
+
+            # 8.4 偏离预设路径过远惩罚 (如果偏离太多说明动作失控)
+            # 真实位置与期望路径点(bgX, bgY)的距离即为偏差
+            actual_x = agent.get("x", bgX)
+            actual_y = agent.get("y", bgY)
+            path_deviation = math.hypot(actual_x - bgX, actual_y - bgY)
+            
+            if path_deviation > 0.5:
+                # 稍微偏离中心线，施加线性惩罚
+                reward -= path_deviation * 0.5
+            if path_deviation > 2.0:
+                # 严重偏离（如冲出车道），施加重罚
+                reward -= 5.0
 
             agent_rewards.append(reward)
 
@@ -665,6 +702,61 @@ class MySimulator(QObject, PyCustomerSimulator):
             elif vid in self.tessAuto.alreadyLaunchedTessngIdSet:
                 bgVehicles.append(v)
         return egoVehicle, bgVehicles
+
+    @staticmethod
+    def _check_bbox_collision(x1, y1, heading1, l1, w1, x2, y2, heading2, l2, w2):
+        """使用分离轴定理(SAT)检测两个OBB(带有朝向的矩形)是否发生碰撞"""
+        def get_corners(cx, cy, heading, length, width):
+            # 将 heading 转换为数学弧度 (90 - heading)
+            rad = math.radians(90.0 - heading)
+            cos_h = math.cos(rad)
+            sin_h = math.sin(rad)
+            hl = length / 2.0
+            hw = width / 2.0
+            
+            # 车头方向为X轴，车身宽为Y轴
+            dx1, dy1 = hl * cos_h, hl * sin_h
+            dx2, dy2 = -hw * sin_h, hw * cos_h
+            
+            return [
+                (cx + dx1 + dx2, cy + dy1 + dy2),
+                (cx + dx1 - dx2, cy + dy1 - dy2),
+                (cx - dx1 - dx2, cy - dy1 - dy2),
+                (cx - dx1 + dx2, cy - dy1 + dy2)
+            ]
+            
+        def get_axes(corners):
+            axes = []
+            for i in range(2): # 矩形只需要相邻两条边的法向量
+                p1 = corners[i]
+                p2 = corners[(i + 1) % 4]
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]
+                length_edge = math.hypot(dx, dy)
+                if length_edge > 1e-6:
+                    axes.append((-dy / length_edge, dx / length_edge))
+            return axes
+            
+        corners1 = get_corners(x1, y1, heading1, l1, w1)
+        corners2 = get_corners(x2, y2, heading2, l2, w2)
+        
+        axes = get_axes(corners1) + get_axes(corners2)
+        
+        for axis in axes:
+            min1, max1 = float('inf'), float('-inf')
+            for p in corners1:
+                proj = p[0] * axis[0] + p[1] * axis[1]
+                min1, max1 = min(min1, proj), max(max1, proj)
+                
+            min2, max2 = float('inf'), float('-inf')
+            for p in corners2:
+                proj = p[0] * axis[0] + p[1] * axis[1]
+                min2, max2 = min(min2, proj), max(max2, proj)
+                
+            if max1 < min2 or max2 < min1:
+                return False # 找到分离轴，没有碰撞
+                
+        return True # 所有轴都有重叠，发生碰撞
 
     @staticmethod
     def _posOnPath(smoothed, dist):
