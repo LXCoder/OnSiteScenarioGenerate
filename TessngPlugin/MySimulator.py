@@ -190,8 +190,10 @@ class MySimulator(QObject, PyCustomerSimulator):
                 self.createBgVehicles()
             return
 
+        # 找主车和所有背景车
+        egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
         # 找任意一辆背景车作为观测基准
-        bgVehicle = self.findBgVehicle(vehicles)
+        bgVehicle = bgVehicles[0] if bgVehicles else None
         if bgVehicle is None:
             return
 
@@ -506,112 +508,121 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def computeReward(self) -> float:
-        reward = 0.0
-        self._is_collision = False  # 记录是否发生碰撞
-        
-        bgName = list(self.bgAgents.keys())[0] if self.bgAgents else None
-        if bgName is None or self.egoState is None:
-            return reward
+        """
+        计算奖励：遍历所有背景车，取其中的最高奖励作为当前步的反馈。
+        这鼓励至少有一辆背景车能成功执行干扰任务。
+        """
+        if not self.bgAgents or self.egoState is None:
+            return 0.0
 
-        agent = self.bgAgents[bgName]
+        self._is_collision = False
+        agent_rewards = []
 
-        # 1. 基础存活奖励 (降低权重，避免一直苟活)
-        reward += 0.05
-
-        # 2. 速度与位置计算
-        egoSpeed = self.egoState.speed
-        speedDiff = agent["speed"] - egoSpeed
-        
-        bgX, bgY, _ = self._posOnPath(agent["smoothed"], agent["progress"])
         egoX = self.egoState.x
         egoY = -self.egoState.y
-
+        egoSpeed = self.egoState.speed
         egoHeadingRad = math.radians(90.0 - self.egoState.heading)
-        dx = bgX - egoX
-        dy = bgY - egoY
-        forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
-        lateralDist = -dx * math.sin(egoHeadingRad) + dy * math.cos(egoHeadingRad)
 
-        distToEgo = math.sqrt(dx**2 + dy**2)
+        for name, agent in self.bgAgents.items():
+            reward = 0.0
+            
+            # 1. 基础存活奖励
+            reward += 0.05
 
-        # 3. 碰撞与相对距离奖励 (核心干扰逻辑升级)
-        if distToEgo < 2.5:
-            # 极度危险距离，考虑到车辆长宽，中心距小于2.5米基本发生物理碰撞
-            reward += 50.0  # 成功造成碰撞，给予极大奖励（目标达成）
-            self._is_collision = True
-            return reward   # 发生碰撞后直接返回，不计入后续的惩罚
+            # 2. 相对位置与速度计算
+            bgX, bgY, _ = self._posOnPath(agent["smoothed"], agent["progress"])
+            dx = bgX - egoX
+            dy = bgY - egoY
+            distToEgo = math.sqrt(dx**2 + dy**2)
+            
+            # 投影到主车坐标系
+            forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
+            lateralDist = -dx * math.sin(egoHeadingRad) + dy * math.cos(egoHeadingRad)
+            speedDiff = agent["speed"] - egoSpeed
 
-        elif distToEgo < 10.0:
-            # 危险区域：非常逼近
-            reward += 1.0 * (1.0 - distToEgo / 10.0)
-        elif distToEgo < 25.0:
-            # 潜在威胁区域
-            reward += 0.3 * (1.0 - distToEgo / 25.0)
+            # 3. 碰撞判定 (核心成功条件)
+            if distToEgo < 2.5:
+                reward += 50.0
+                self._is_collision = True
+                agent_rewards.append(reward)
+                continue
 
-        # 4. 速度控制奖励
-        if forwardDist < 0:
-            # 背景车在主车后方：鼓励比主车快
-            if speedDiff > 0:
-                reward += min(speedDiff / 10.0, 0.2)
-        else:
-            # 背景车在主车前方：鼓励比主车慢 (压车)
-            if speedDiff < 0:
-                reward += min(abs(speedDiff) / 10.0, 0.2)
+            # 4. 距离诱导奖励
+            if distToEgo < 10.0:
+                reward += 1.0 * (1.0 - distToEgo / 10.0)
+            elif distToEgo < 25.0:
+                reward += 0.3 * (1.0 - distToEgo / 25.0)
 
-        # 5. 变道插车/卡位奖励 (利用横向偏差)
-        # 如果距离主车较近且横向距离较小，说明正在阻挡主车路径
-        if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
-            # 正前方阻挡
-            reward += 0.5
-            # 如果主车速度大于背景车速度，说明成功压制了主车
-            if egoSpeed > agent["speed"] + 1.0:
+            # 5. 速度与位置配合奖励
+            if forwardDist < 0:
+                # 在后方：追赶
+                if speedDiff > 0: reward += min(speedDiff / 10.0, 0.2)
+            else:
+                # 在前方：阻挡/压车
+                if speedDiff < 0: reward += min(abs(speedDiff) / 10.0, 0.2)
+
+            # 6. 卡位奖励
+            if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
                 reward += 0.5
+                if egoSpeed > agent["speed"] + 1.0:
+                    reward += 0.5
 
-        # 6. 侧向逼近奖励 (鼓励从侧面挤压)
-        if -5.0 < forwardDist < 5.0 and 1.5 < abs(lateralDist) < 4.0:
-            # 与主车并行，鼓励缩小横向距离
-            reward += 0.2 * (4.0 - abs(lateralDist))
+            # 7. 侧向挤压
+            if -5.0 < forwardDist < 5.0 and 1.5 < abs(lateralDist) < 4.0:
+                reward += 0.2 * (4.0 - abs(lateralDist))
 
-        # 7. 惩罚项
-        # 停车惩罚 (避免原地发呆，除非距离主车很远)
-        if agent["speed"] < 0.5 and distToEgo > 10.0:
-            reward -= 0.5
+            # 8. 惩罚项
+            if agent["speed"] < 0.5 and distToEgo > 10.0:
+                reward -= 0.5
+            
+            hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
+            if hDiff > 180: hDiff = 360 - hDiff
+            if hDiff > 3.0: reward -= min(hDiff / 15.0, 0.5)
 
-        # 剧烈画龙惩罚 (防止无意义的蛇形走位)
-        hDiff = (
-            abs(agent["heading"] - agent["prevHeading"]) if "heading" in agent else 0
-        )
-        if hDiff > 180:
-            hDiff = 360 - hDiff
-        if hDiff > 3.0:
-            reward -= min(hDiff / 15.0, 0.5)
+            agent_rewards.append(reward)
 
-        return reward
+        # 返回所有背景车中表现最好的那一辆的奖励
+        return max(agent_rewards) if agent_rewards else 0.0
 
     # ============================================================
     #  终止判断
     # ============================================================
 
     def checkDone(self) -> bool:
-        # 1. 成功发生碰撞，完成干扰目标，立即终止回合
+        # 1. 任意一辆背景车发生碰撞，干扰成功
         if getattr(self, '_is_collision', False):
-            print(f"[Done] 背景车成功与主车发生碰撞! 终止当前 Episode.")
+            print(f"[Done] 发生碰撞! 干扰任务圆满完成。")
             return True
 
+        # 2. 达到最大步数
         if self.stepCount >= 500:
             return True
-        bgName = list(self.bgAgents.keys())[0] if self.bgAgents else None
-        if bgName:
-            agent = self.bgAgents[bgName]
-            if agent["progress"] >= agent["totalLength"]:
-                return True
+
+        # 3. 检查所有背景车的状态
+        all_finished = True
+        any_stuck = False
+
+        for name, agent in self.bgAgents.items():
+            # 只要有一辆车还没跑完，就不算全部结束
+            if agent["progress"] < agent["totalLength"]:
+                all_finished = False
+            
+            # 检查是否卡死 (由于是多车，只要有一辆车彻底卡死，可能场景就失效了)
             if agent["speed"] < 0.1:
-                self._zc = getattr(self, "_zc", 0) + 1
-                if self._zc > 10:
-                    self._zc = 0
-                    return True
+                agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
+                if agent["_stuck_count"] > 15:
+                    any_stuck = True
             else:
-                self._zc = 0
+                agent["_stuck_count"] = 0
+
+        # 如果所有车都跑完了，或者有车卡死了，终止 Episode
+        if all_finished:
+            print("[Done] 所有背景车均到达终点。")
+            return True
+        if any_stuck:
+            print("[Done] 探测到背景车卡死，重置。")
+            return True
+
         return False
 
     # ============================================================
@@ -619,13 +630,17 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def findBgVehicle(self, vehicles):
-        """找到第一辆背景车（不是主车的 Tessng 车辆）"""
+        """找到主车和所有背景车"""
+        egoVehicle = None
+        bgVehicles = []
         egoTessngId = self.tessAuto.avName2TessngIdMap.get(self.egoName)
         for v in vehicles:
             vid = v.id()
-            if vid in self.tessAuto.alreadyLaunchedTessngIdSet and vid != egoTessngId:
-                return v
-        return None
+            if vid == egoTessngId:
+                egoVehicle = v
+            elif vid in self.tessAuto.alreadyLaunchedTessngIdSet:
+                bgVehicles.append(v)
+        return egoVehicle, bgVehicles
 
     @staticmethod
     def _posOnPath(smoothed, dist):
