@@ -1,4 +1,5 @@
 import math
+import random
 
 from AutoPilot.Player.BasePlayer import BasePlayer
 from AutoPilot.Player.VehicleState import VehicleState
@@ -46,8 +47,13 @@ class TestPlayer(BasePlayer):
         self.smoothedLine = self.smoothCenterLine(self.centerLine, interval=1.0)
         
         self.dt = 0.1
-        self.egoSpeed = 10.0
-        self.egoProgress = 0.0
+        
+        # [优化] Domain Randomization (领域随机化)
+        # 打破每次固定不变的轨迹，赋予主车随机的初始状态和目标速度
+        self.egoSpeed = 10.0 + random.uniform(-2.0, 3.0)      # 初始速度: 8.0 ~ 13.0 m/s
+        self.egoProgress = random.uniform(0.0, 15.0)          # 初始位置: 随机延后 0~15 米，错开背景车的相遇时机
+        self.target_speed = 15.0 + random.uniform(-3.0, 2.0)  # 目标期望速度: 12.0 ~ 17.0 m/s
+        
         self.accel = 0.0
 
     @staticmethod
@@ -122,9 +128,10 @@ class TestPlayer(BasePlayer):
         return bx, by, heading
 
     def predict(self, obs: Observation) -> None:
-        """接收观测信息，更新内部决策（简单PID/目标速度跟随）"""
-        target_speed = 15.0
-        speed_diff = target_speed - self.egoSpeed
+        """接收观测信息，更新内部决策（引入速度扰动以增加多样性）"""
+        # [优化] 添加随机的速度波动，模拟人类驾驶员无法完美控速的特性
+        speed_noise = random.uniform(-0.5, 0.5)
+        speed_diff = (self.target_speed + speed_noise) - self.egoSpeed
         
         # 简单比例控制计算加速度
         self.accel = max(-5.0, min(5.0, speed_diff * 0.5))
@@ -132,7 +139,10 @@ class TestPlayer(BasePlayer):
     def act(self) -> VehicleState:
         """输出当前帧的车辆状态"""
         # 1. 更新速度与距离
-        self.egoSpeed += self.accel * self.dt
+        # [优化] 在加速时加入微小的动作噪声，使轨迹不完全平滑可预测
+        action_noise = random.uniform(-0.2, 0.2) if self.egoSpeed > 5.0 else 0.0
+        
+        self.egoSpeed += (self.accel + action_noise) * self.dt
         self.egoSpeed = max(0.0, min(self.egoSpeed, 33.3)) # 限制最大速度
         
         moveDist = self.egoSpeed * self.dt
