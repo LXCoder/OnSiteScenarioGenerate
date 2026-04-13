@@ -22,7 +22,7 @@ if __name__ == '__main__':
 
     workspace = os.fspath(Path(__file__).resolve().parent)
     config = {'__workspace':workspace,
-              '__netfilepath': r"F:\TJST_Project\TJST_VirtualReality_Fusion\MultiUser_TJST_request\TJST_Request_Vtessngauto\Data\YYT_TJST_0619_unlimited.tess",
+              '__netfilepath': r"Data\YYT_TJST_0619_unlimited.tess",
               '__simuafterload': True,
               '__custsimubysteps': False
               }
