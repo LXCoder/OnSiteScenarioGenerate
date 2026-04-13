@@ -436,6 +436,10 @@ class MySimulator(QObject, PyCustomerSimulator):
             agent["progress"] = 0.0
             agent["prevHeading"] = 0.0
         self.isFirstStep = True
+        
+        # [优化] 在重置环境时，重新加载选手。确保 Ego 在每次 Episode 都重置进度和状态。
+        if hasattr(self, 'playerManager'):
+            self.playerManager.load_all()
 
     def buildInitialObs(self):
         return np.zeros(94, dtype=np.float32)
@@ -503,6 +507,8 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def computeReward(self) -> float:
         reward = 0.0
+        self._is_collision = False  # 记录是否发生碰撞
+        
         bgName = list(self.bgAgents.keys())[0] if self.bgAgents else None
         if bgName is None or self.egoState is None:
             return reward
@@ -512,10 +518,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 1. 基础存活奖励 (降低权重，避免一直苟活)
         reward += 0.05
 
-        # 2. 速度奖励：鼓励保持一定的相对速度，而不是固定 15m/s
+        # 2. 速度与位置计算
         egoSpeed = self.egoState.speed
         speedDiff = agent["speed"] - egoSpeed
-        # 如果在主车后面，鼓励加速追赶；如果在前面，鼓励减速压车
+        
         bgX, bgY, _ = self._posOnPath(agent["smoothed"], agent["progress"])
         egoX = self.egoState.x
         egoY = -self.egoState.y
@@ -528,6 +534,21 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         distToEgo = math.sqrt(dx**2 + dy**2)
 
+        # 3. 碰撞与相对距离奖励 (核心干扰逻辑升级)
+        if distToEgo < 2.5:
+            # 极度危险距离，考虑到车辆长宽，中心距小于2.5米基本发生物理碰撞
+            reward += 50.0  # 成功造成碰撞，给予极大奖励（目标达成）
+            self._is_collision = True
+            return reward   # 发生碰撞后直接返回，不计入后续的惩罚
+
+        elif distToEgo < 10.0:
+            # 危险区域：非常逼近
+            reward += 1.0 * (1.0 - distToEgo / 10.0)
+        elif distToEgo < 25.0:
+            # 潜在威胁区域
+            reward += 0.3 * (1.0 - distToEgo / 25.0)
+
+        # 4. 速度控制奖励
         if forwardDist < 0:
             # 背景车在主车后方：鼓励比主车快
             if speedDiff > 0:
@@ -537,34 +558,22 @@ class MySimulator(QObject, PyCustomerSimulator):
             if speedDiff < 0:
                 reward += min(abs(speedDiff) / 10.0, 0.2)
 
-        # 3. 相对距离奖励 (核心干扰逻辑升级)
-        if distToEgo < 3.0:
-            # 极度危险距离，最高奖励 (发生碰撞或极近逼停)
-            reward += 2.0
-        elif distToEgo < 10.0:
-            # 危险区域
-            reward += 1.0 * (1.0 - distToEgo / 10.0)
-        elif distToEgo < 25.0:
-            # 潜在威胁区域
-            reward += 0.3 * (1.0 - distToEgo / 25.0)
-
-        # 4. 变道插车/卡位奖励 (利用横向偏差)
+        # 5. 变道插车/卡位奖励 (利用横向偏差)
         # 如果距离主车较近且横向距离较小，说明正在阻挡主车路径
         if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
             # 正前方阻挡
             reward += 0.5
-
             # 如果主车速度大于背景车速度，说明成功压制了主车
             if egoSpeed > agent["speed"] + 1.0:
                 reward += 0.5
 
-        # 5. 侧向逼近奖励 (鼓励从侧面挤压)
+        # 6. 侧向逼近奖励 (鼓励从侧面挤压)
         if -5.0 < forwardDist < 5.0 and 1.5 < abs(lateralDist) < 4.0:
             # 与主车并行，鼓励缩小横向距离
             reward += 0.2 * (4.0 - abs(lateralDist))
 
-        # 6. 惩罚项
-        # 停车惩罚 (避免原地发呆)
+        # 7. 惩罚项
+        # 停车惩罚 (避免原地发呆，除非距离主车很远)
         if agent["speed"] < 0.5 and distToEgo > 10.0:
             reward -= 0.5
 
@@ -584,6 +593,11 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def checkDone(self) -> bool:
+        # 1. 成功发生碰撞，完成干扰目标，立即终止回合
+        if getattr(self, '_is_collision', False):
+            print(f"[Done] 背景车成功与主车发生碰撞! 终止当前 Episode.")
+            return True
+
         if self.stepCount >= 500:
             return True
         bgName = list(self.bgAgents.keys())[0] if self.bgAgents else None
