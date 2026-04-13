@@ -509,56 +509,73 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         agent = self.bgAgents[bgName]
 
-        # 1. 存活奖励
-        reward += 0.1
+        # 1. 基础存活奖励 (降低权重，避免一直苟活)
+        reward += 0.05
 
-        # 2. 速度接近目标
-        targetSpeed = 15.0
-        reward += (
-            1.0 - min(abs(agent["speed"] - targetSpeed) / targetSpeed, 1.0)
-        ) * 0.2
-
-        # 3. 前进奖励
-        reward += min(agent["speed"] * self.dt / 2.0, 0.1)
-
-        # 4. 接近主车奖励（核心：鼓励靠近主车干扰）
+        # 2. 速度奖励：鼓励保持一定的相对速度，而不是固定 15m/s
+        egoSpeed = self.egoState.speed
+        speedDiff = agent["speed"] - egoSpeed
+        # 如果在主车后面，鼓励加速追赶；如果在前面，鼓励减速压车
         bgX, bgY, _ = self._posOnPath(agent["smoothed"], agent["progress"])
         egoX = self.egoState.x
-        egoY = -self.egoState.y  # egoState.y 是 Tessng 的负 y
-        distToEgo = math.sqrt((bgX - egoX) ** 2 + (bgY - egoY) ** 2)
+        egoY = -self.egoState.y
 
-        if distToEgo < 5.0:
-            # 非常近，大奖励（成功干扰）
-            reward += 1.0
-        elif distToEgo < 15.0:
-            # 中等距离，有奖励
-            reward += 0.5 * (1.0 - distToEgo / 15.0)
-        elif distToEgo < 30.0:
-            # 稍远，小奖励
-            reward += 0.1 * (1.0 - distToEgo / 30.0)
+        egoHeadingRad = math.radians(90.0 - self.egoState.heading)
+        dx = bgX - egoX
+        dy = bgY - egoY
+        forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
+        lateralDist = -dx * math.sin(egoHeadingRad) + dy * math.cos(egoHeadingRad)
 
-        # 5. 正面对着主车额外奖励（不只是靠近，还要在主车前方）
-        if self.egoState:
-            # 背景车在主车前方 → 更好的干扰位置
-            egoHeadingRad = math.radians(90.0 - self.egoState.heading)
-            dx = bgX - egoX
-            dy = bgY - egoY
-            # 在主车前方的投影距离
-            forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
-            if 0 < forwardDist < 20.0:
-                reward += 0.3  # 在主车前方
+        distToEgo = math.sqrt(dx**2 + dy**2)
 
-        # 6. 停车惩罚
-        if agent["speed"] < 0.5:
-            reward -= 0.3
+        if forwardDist < 0:
+            # 背景车在主车后方：鼓励比主车快
+            if speedDiff > 0:
+                reward += min(speedDiff / 10.0, 0.2)
+        else:
+            # 背景车在主车前方：鼓励比主车慢 (压车)
+            if speedDiff < 0:
+                reward += min(abs(speedDiff) / 10.0, 0.2)
 
-        # 7. 航向平滑
-        x, y, heading = self._posOnPath(agent["smoothed"], agent["progress"])
-        hDiff = abs(heading - agent["prevHeading"])
+        # 3. 相对距离奖励 (核心干扰逻辑升级)
+        if distToEgo < 3.0:
+            # 极度危险距离，最高奖励 (发生碰撞或极近逼停)
+            reward += 2.0
+        elif distToEgo < 10.0:
+            # 危险区域
+            reward += 1.0 * (1.0 - distToEgo / 10.0)
+        elif distToEgo < 25.0:
+            # 潜在威胁区域
+            reward += 0.3 * (1.0 - distToEgo / 25.0)
+
+        # 4. 变道插车/卡位奖励 (利用横向偏差)
+        # 如果距离主车较近且横向距离较小，说明正在阻挡主车路径
+        if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
+            # 正前方阻挡
+            reward += 0.5
+
+            # 如果主车速度大于背景车速度，说明成功压制了主车
+            if egoSpeed > agent["speed"] + 1.0:
+                reward += 0.5
+
+        # 5. 侧向逼近奖励 (鼓励从侧面挤压)
+        if -5.0 < forwardDist < 5.0 and 1.5 < abs(lateralDist) < 4.0:
+            # 与主车并行，鼓励缩小横向距离
+            reward += 0.2 * (4.0 - abs(lateralDist))
+
+        # 6. 惩罚项
+        # 停车惩罚 (避免原地发呆)
+        if agent["speed"] < 0.5 and distToEgo > 10.0:
+            reward -= 0.5
+
+        # 剧烈画龙惩罚 (防止无意义的蛇形走位)
+        hDiff = (
+            abs(agent["heading"] - agent["prevHeading"]) if "heading" in agent else 0
+        )
         if hDiff > 180:
             hDiff = 360 - hDiff
-        if hDiff > 5.0:
-            reward -= min(hDiff / 30.0, 0.5)
+        if hDiff > 3.0:
+            reward -= min(hDiff / 15.0, 0.5)
 
         return reward
 
