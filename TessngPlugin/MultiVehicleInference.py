@@ -99,6 +99,7 @@ class MultiVehicleInference:
         path: List[Tuple[float, float]],
         speed: float = 10.0,
         smoothInterval: float = 1.0,
+        color: str = "#048dc7", 
     ) -> bool:
         """
         添加一辆车

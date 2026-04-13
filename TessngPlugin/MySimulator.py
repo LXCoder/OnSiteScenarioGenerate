@@ -349,7 +349,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             prefix = scenario["file"].replace(".json", "")
             for name, info in scenario["vehicles"].items():
                 self.multiInfer.addVehicle(
-                    f"{prefix}_{name}", info["path"], info["speed"]
+                    f"{prefix}_{name}", info["path"], info["speed"], color=info["color"]
                 )
 
         self._inferCreated = False
@@ -438,9 +438,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             agent["progress"] = 0.0
             agent["prevHeading"] = 0.0
         self.isFirstStep = True
-        
+
         # [优化] 在重置环境时，重新加载选手。确保 Ego 在每次 Episode 都重置进度和状态。
-        if hasattr(self, 'playerManager'):
+        if hasattr(self, "playerManager"):
             self.playerManager.load_all()
 
     def buildInitialObs(self):
@@ -519,29 +519,48 @@ class MySimulator(QObject, PyCustomerSimulator):
         agent_rewards = []
 
         egoX = self.egoState.x
-        egoY = -self.egoState.y
+        egoY = self.egoState.y
         egoSpeed = self.egoState.speed
         egoHeadingRad = math.radians(90.0 - self.egoState.heading)
 
         for name, agent in self.bgAgents.items():
             reward = 0.0
-            
+
             # 1. 基础存活奖励
             reward += 0.05
 
             # 2. 相对位置与速度计算
-            bgX, bgY, _ = self._posOnPath(agent["smoothed"], agent["progress"])
+            bgX, bgY, bgHeading = self._posOnPath(agent["smoothed"], agent["progress"])
             dx = bgX - egoX
             dy = bgY - egoY
-            distToEgo = math.sqrt(dx**2 + dy**2)
-            
+            distToEgo = math.sqrt(dx**2 + dy**2) / 10.0
+            debug_msg = "主车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 背景车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 距离: {:.2f}m".format(
+                egoX,
+                egoY,
+                p2m(egoX),
+                p2m(egoY),
+                bgX,
+                bgY,
+                p2m(bgX),
+                p2m(bgY),
+                distToEgo,
+            )
+            # if name == "car_2":
+            #     print(debug_msg)
+
             # 投影到主车坐标系
             forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
             lateralDist = -dx * math.sin(egoHeadingRad) + dy * math.cos(egoHeadingRad)
             speedDiff = agent["speed"] - egoSpeed
 
-            # 3. 碰撞判定 (核心成功条件)
-            if distToEgo < 2.5:
+            # 3. 碰撞判定 (核心成功条件: Bounding Box 碰撞检测)
+            # 假设车辆标准尺寸：长 4.8m，宽 2.0m
+            is_collide = self._check_bbox_collision(
+                bgX, bgY, bgHeading, 4.8, 2.0,
+                egoX, egoY, self.egoState.heading, 4.8, 2.0
+            )
+            
+            if is_collide:
                 reward += 50.0
                 self._is_collision = True
                 agent_rewards.append(reward)
@@ -556,10 +575,12 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 5. 速度与位置配合奖励
             if forwardDist < 0:
                 # 在后方：追赶
-                if speedDiff > 0: reward += min(speedDiff / 10.0, 0.2)
+                if speedDiff > 0:
+                    reward += min(speedDiff / 10.0, 0.2)
             else:
                 # 在前方：阻挡/压车
-                if speedDiff < 0: reward += min(abs(speedDiff) / 10.0, 0.2)
+                if speedDiff < 0:
+                    reward += min(abs(speedDiff) / 10.0, 0.2)
 
             # 6. 卡位奖励
             if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
@@ -574,14 +595,17 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 8. 惩罚项
             if agent["speed"] < 0.5 and distToEgo > 10.0:
                 reward -= 0.5
-            
+
             hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
-            if hDiff > 180: hDiff = 360 - hDiff
-            if hDiff > 3.0: reward -= min(hDiff / 15.0, 0.5)
+            if hDiff > 180:
+                hDiff = 360 - hDiff
+            if hDiff > 3.0:
+                reward -= min(hDiff / 15.0, 0.5)
 
             agent_rewards.append(reward)
 
         # 返回所有背景车中表现最好的那一辆的奖励
+        # print(f"agent_rewards: {agent_rewards}")
         return max(agent_rewards) if agent_rewards else 0.0
 
     # ============================================================
@@ -590,7 +614,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def checkDone(self) -> bool:
         # 1. 任意一辆背景车发生碰撞，干扰成功
-        if getattr(self, '_is_collision', False):
+        if getattr(self, "_is_collision", False):
             print(f"[Done] 发生碰撞! 干扰任务圆满完成。")
             return True
 
@@ -606,7 +630,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 只要有一辆车还没跑完，就不算全部结束
             if agent["progress"] < agent["totalLength"]:
                 all_finished = False
-            
+
             # 检查是否卡死 (由于是多车，只要有一辆车彻底卡死，可能场景就失效了)
             if agent["speed"] < 0.1:
                 agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
@@ -672,3 +696,59 @@ class MySimulator(QObject, PyCustomerSimulator):
         dy = by - ay
         heading = math.degrees(math.atan2(dx, dy)) % 360.0
         return bx, by, heading
+    
+    @staticmethod
+    def _check_bbox_collision(x1, y1, heading1, l1, w1, x2, y2, heading2, l2, w2):
+        """使用分离轴定理(SAT)检测两个OBB(带有朝向的矩形)是否发生碰撞"""
+        def get_corners(cx, cy, heading, length, width):
+            # 将 heading 转换为数学弧度 (90 - heading)
+            rad = math.radians(90.0 - heading)
+            cos_h = math.cos(rad)
+            sin_h = math.sin(rad)
+            hl = length / 2.0
+            hw = width / 2.0
+            
+            # 车头方向为X轴，车身宽为Y轴
+            dx1, dy1 = hl * cos_h, hl * sin_h
+            dx2, dy2 = -hw * sin_h, hw * cos_h
+            
+            return [
+                (cx + dx1 + dx2, cy + dy1 + dy2),
+                (cx + dx1 - dx2, cy + dy1 - dy2),
+                (cx - dx1 - dx2, cy - dy1 - dy2),
+                (cx - dx1 + dx2, cy - dy1 + dy2)
+            ]
+            
+        def get_axes(corners):
+            axes = []
+            for i in range(2): # 矩形只需要相邻两条边的法向量
+                p1 = corners[i]
+                p2 = corners[(i + 1) % 4]
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]
+                length_edge = math.hypot(dx, dy)
+                if length_edge > 1e-6:
+                    axes.append((-dy / length_edge, dx / length_edge))
+            return axes
+            
+        corners1 = get_corners(x1, y1, heading1, l1, w1)
+        corners2 = get_corners(x2, y2, heading2, l2, w2)
+        # print(f"bbox: {corners1} vs {corners2}")
+        
+        axes = get_axes(corners1) + get_axes(corners2)
+        
+        for axis in axes:
+            min1, max1 = float('inf'), float('-inf')
+            for p in corners1:
+                proj = p[0] * axis[0] + p[1] * axis[1]
+                min1, max1 = min(min1, proj), max(max1, proj)
+                
+            min2, max2 = float('inf'), float('-inf')
+            for p in corners2:
+                proj = p[0] * axis[0] + p[1] * axis[1]
+                min2, max2 = min(min2, proj), max(max2, proj)
+                
+            if max1 < min2 or max2 < min1:
+                return False # 找到分离轴，没有碰撞
+                
+        return True # 所有轴都有重叠，发生碰撞

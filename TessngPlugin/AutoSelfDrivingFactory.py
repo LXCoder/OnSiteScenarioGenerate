@@ -20,7 +20,7 @@ class Point3D:
 
 
 class AutoSelfDrivingMsg:
-	def __init__(self, id, name, position: Point3D, speed, timestamp, length, width, height, angle):
+	def __init__(self, id, name, position: Point3D, speed, timestamp, length, width, height, angle, color):
 		self._id = id
 		self._name = name
 		self._position = position
@@ -32,6 +32,7 @@ class AutoSelfDrivingMsg:
 		self._height = height
 
 		self._angle = angle
+		self._color = color
 
 	@property
 	def id(self):
@@ -99,6 +100,12 @@ class AutoSelfDrivingMsg:
 	@angle.setter
 	def angle(self, value):
 		self._angle = value
+	@property
+	def color(self):
+		return self._color
+	@color.setter
+	def color(self, value):
+		self._color = value
 
 
 class AutoSelfDrivingFactory:
@@ -166,8 +173,9 @@ class AutoSelfDrivingFactory:
 				width = avValue.get("width")
 				height = 150
 				angle = avValue.get("courseAngle")
+				color = avValue.get("color", "#00BFFF")
 
-				msg = AutoSelfDrivingMsg(avName, avName, position, speed, int(time.time()), length, width, height, angle)
+				msg = AutoSelfDrivingMsg(avName, avName, position, speed, int(time.time()), length, width, height, angle, color)
 
 				self.avChannel2AvMsgMap[avName] = msg
 
@@ -196,7 +204,7 @@ class AutoSelfDrivingFactory:
 
 				dvp.vehiTypeCode = self.tessngVehicleTypeCode
 				dvp.speed = avMsg.speed
-				dvp.color = "#00BFFF"
+				dvp.color = avMsg.color
 				dvp.dist = location.distToStart
 				target = location.pLaneObject
 				# 如果是路段
