@@ -78,7 +78,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 当前场景
         self.currentScenarioIdx = 0
         self.currentVehicles = {}
-        self.bgAgents = {}              # 背景车运行状态
+        self.bgAgents = {}  # 背景车运行状态
 
         # 主车最新状态（每帧从 TestPlayer.act() 读取）
         self.egoState = None
@@ -216,11 +216,13 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.episodeCount += 1
             bgName = list(self.bgAgents.keys())[0] if self.bgAgents else "?"
             agent = self.bgAgents.get(bgName, {})
-            print(f"[Episode {self.episodeCount}] "
-                  f"场景={self.scenarios[self.currentScenarioIdx]['file']} "
-                  f"步数={self.stepCount} "
-                  f"距离={agent.get('progress', 0):.1f}m "
-                  f"奖励={self.episodeReward:.2f}")
+            print(
+                f"[Episode {self.episodeCount}] "
+                f"场景={self.scenarios[self.currentScenarioIdx]['file']} "
+                f"步数={self.stepCount} "
+                f"距离={agent.get('progress', 0):.1f}m "
+                f"奖励={self.episodeReward:.2f}"
+            )
             self.episodeReward = 0.0
             self.isFirstStep = True
             return
@@ -233,10 +235,14 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def _afterOneStepInference(self, vehicles):
-        if not getattr(self, '_inferCreated', False):
+        if not getattr(self, "_inferCreated", False):
             initStates = self.multiInfer.getInitialStates()
-            vsMap = {name: VehicleState(x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"])
-                     for name, s in initStates.items()}
+            vsMap = {
+                name: VehicleState(
+                    x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"]
+                )
+                for name, s in initStates.items()
+            }
             self.tessAuto.setAvChannel2AvMsgMap(vsMap)
             self.tessAuto.vehicleCreate()
             self._inferCreated = True
@@ -244,14 +250,20 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
 
         results = self.multiInfer.stepAll(vehicles, p2m, dt=self.dt)
-        vsMap = {name: VehicleState(x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"])
-                 for name, s in results.items()}
+        vsMap = {
+            name: VehicleState(
+                x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"]
+            )
+            for name, s in results.items()
+        }
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
         self._inferStep += 1
         if self._inferStep % 100 == 0:
-            print(f"[推理 Step {self._inferStep}] "
-                  f"背景车: {self.multiInfer.aliveCount}/{len(self.multiInfer.agents)}")
+            print(
+                f"[推理 Step {self._inferStep}] "
+                f"背景车: {self.multiInfer.aliveCount}/{len(self.multiInfer.agents)}"
+            )
 
         if self.multiInfer.allFinished:
             print("[推理] 所有背景车到达终点，重置")
@@ -281,6 +293,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             if RL_ALGO == "PPO":
                 from stable_baselines3 import PPO
+
                 model = PPO(
                     "MlpPolicy",
                     self.env,
@@ -297,6 +310,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 )
             else:
                 from stable_baselines3 import DQN
+
                 model = DQN(
                     "MlpPolicy",
                     self.env,
@@ -330,14 +344,17 @@ class MySimulator(QObject, PyCustomerSimulator):
         print("\n[推理] 初始化多车推理...")
         self.multiInfer = MultiVehicleInference(savePath, algo=RL_ALGO)
         for scenario in self.scenarios:
-            prefix = scenario['file'].replace('.json', '')
+            prefix = scenario["file"].replace(".json", "")
             for name, info in scenario["vehicles"].items():
-                self.multiInfer.addVehicle(f"{prefix}_{name}", info["path"], info["speed"])
+                self.multiInfer.addVehicle(
+                    f"{prefix}_{name}", info["path"], info["speed"]
+                )
 
         self._inferCreated = False
 
         while not self.env._closed:
             import time
+
             time.sleep(1.0)
 
     # ============================================================
@@ -444,7 +461,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         obs[4] = np.clip(agent["speed"] / MAX_SPEED, 0, 1)
         obs[5] = np.clip(self.currentControl[1] / (2 * MAX_STEER_ANGLE) + 0.5, 0, 1)
-        obs[6] = np.clip((self.currentControl[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1)
+        obs[6] = np.clip(
+            (self.currentControl[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1
+        )
         obs[7] = np.clip(self.prevSteer / (2 * MAX_STEER_ANGLE) + 0.5, 0, 1)
         self.prevSteer = self.currentControl[1]
         yawRate = self.yawRateCalc.update(bgVehicle.id(), bgVehicle.angle(), self.dt)
@@ -456,18 +475,23 @@ class MySimulator(QObject, PyCustomerSimulator):
             sparse = NavigationCalculator.sparsifyByDistance(centerLine, 5.0)
             egoPos = bgVehicle.pos()
             navResult = NavigationCalculator.compute(
-                p2m(egoPos.x()), p2m(egoPos.y()),
-                bgVehicle.angle(), sparse, numCheckpoints=5,
+                p2m(egoPos.x()),
+                p2m(egoPos.y()),
+                bgVehicle.angle(),
+                sparse,
+                numCheckpoints=5,
             )
             for i in range(min(5, len(navResult.forwardGaps))):
-                obs[9 + i*2] = navResult.forwardGaps[i]
-                obs[9 + i*2 + 1] = navResult.lateralGaps[i]
+                obs[9 + i * 2] = navResult.forwardGaps[i]
+                obs[9 + i * 2 + 1] = navResult.lateralGaps[i]
             obs[19] = navResult.curvatureRadius
             obs[20] = navResult.curvatureDirection
             obs[21] = navResult.laneAngleDiff
 
         # 雷达（包含主车和其他 Tessng 车辆）
-        surroundResult = SurroundingCalculator.fromTessngVehicles(bgVehicle, vehicles, p2m, maxNearby=8)
+        surroundResult = SurroundingCalculator.fromTessngVehicles(
+            bgVehicle, vehicles, p2m, maxNearby=8
+        )
         for i, r in enumerate(surroundResult.radar):
             obs[22 + i] = r
 
@@ -490,7 +514,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 2. 速度接近目标
         targetSpeed = 15.0
-        reward += (1.0 - min(abs(agent["speed"] - targetSpeed) / targetSpeed, 1.0)) * 0.2
+        reward += (
+            1.0 - min(abs(agent["speed"] - targetSpeed) / targetSpeed, 1.0)
+        ) * 0.2
 
         # 3. 前进奖励
         reward += min(agent["speed"] * self.dt / 2.0, 0.1)
@@ -499,7 +525,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         bgX, bgY, _ = self._posOnPath(agent["smoothed"], agent["progress"])
         egoX = self.egoState.x
         egoY = -self.egoState.y  # egoState.y 是 Tessng 的负 y
-        distToEgo = math.sqrt((bgX - egoX)**2 + (bgY - egoY)**2)
+        distToEgo = math.sqrt((bgX - egoX) ** 2 + (bgY - egoY) ** 2)
 
         if distToEgo < 5.0:
             # 非常近，大奖励（成功干扰）
@@ -549,7 +575,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             if agent["progress"] >= agent["totalLength"]:
                 return True
             if agent["speed"] < 0.1:
-                self._zc = getattr(self, '_zc', 0) + 1
+                self._zc = getattr(self, "_zc", 0) + 1
                 if self._zc > 10:
                     self._zc = 0
                     return True
@@ -584,7 +610,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         for i in range(len(smoothed) - 1):
             ax, ay = smoothed[i]
             bx, by = smoothed[i + 1]
-            segLen = math.sqrt((bx-ax)**2 + (by-ay)**2)
+            segLen = math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
             if accumulated + segLen >= dist:
                 ratio = (dist - accumulated) / segLen if segLen > 1e-12 else 0.0
                 x = ax + ratio * (bx - ax)
