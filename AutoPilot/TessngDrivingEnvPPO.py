@@ -44,8 +44,8 @@ class TessngDrivingEnvPPO(gym.Env):
         # 加速度: [-5.0, 5.0] m/s^2
         # 转向角: [-0.7, 0.7] rad (这里与 MySimulator 中的最大转向角对应)
         self.action_space = spaces.Box(
-            low=np.array([-5.0, -0.7]), 
-            high=np.array([5.0, 0.7]), 
+            low=np.array([-7.0, -0.7]), 
+            high=np.array([7.0, 0.7]), 
             dtype=np.float32
         )
 
