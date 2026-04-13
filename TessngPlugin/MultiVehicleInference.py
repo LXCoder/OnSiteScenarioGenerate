@@ -33,7 +33,7 @@ MAX_SPEED = 33.3
 MAX_ACCEL = 5.0
 MAX_DECEL = -5.0
 
-# 离散动作
+# 离散动作 (DQN使用)
 ACTION_TO_CONTROL = {
     0: (0.0, -0.3),
     1: (0.0, 0.0),
@@ -63,11 +63,13 @@ class VehicleAgent:
 
 class MultiVehicleInference:
 
-    def __init__(self, modelPath: str = None):
+    def __init__(self, modelPath: str = None, algo: str = "PPO"):
         """
         Args:
-            modelPath: DQN 模型路径（不含 .zip），传 None 则延迟加载
+            modelPath: DQN/PPO 模型路径（不含 .zip），传 None 则延迟加载
+            algo: 模型算法 ("DQN" 或 "PPO")
         """
+        self.algo = algo
         self.model = None
         self.agents: Dict[str, VehicleAgent] = {}
 
@@ -79,9 +81,13 @@ class MultiVehicleInference:
     # ============================================================
 
     def loadModel(self, modelPath: str):
-        from stable_baselines3 import DQN
-        self.model = DQN.load(modelPath)
-        print(f"[MultiInfer] 模型已加载: {modelPath}")
+        if self.algo == "PPO":
+            from stable_baselines3 import PPO
+            self.model = PPO.load(modelPath)
+        else:
+            from stable_baselines3 import DQN
+            self.model = DQN.load(modelPath)
+        print(f"[MultiInfer] 模型已加载 ({self.algo}): {modelPath}")
 
     # ============================================================
     #  车辆管理
@@ -191,7 +197,13 @@ class MultiVehicleInference:
 
             # 2. 推理
             action, _ = self.model.predict(obs, deterministic=True)
-            accel, steer = ACTION_TO_CONTROL[int(action)]
+            
+            if self.algo == "PPO":
+                # PPO 连续动作 [accel, steer]
+                accel, steer = float(action[0]), float(action[1])
+            else:
+                # DQN 离散动作索引 -> [accel, steer]
+                accel, steer = ACTION_TO_CONTROL[int(action)]
 
             # 3. 更新速度
             agent.speed += accel * dt

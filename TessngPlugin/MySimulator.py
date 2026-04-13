@@ -26,6 +26,7 @@ from Tessng import (
 )
 
 from AutoPilot.TessngDrivingEnv import TessngDrivingEnv, ACTIONS, ACTION_TO_CONTROL
+from AutoPilot.TessngDrivingEnvPPO import TessngDrivingEnvPPO
 from AutoPilot.Player.VehicleState import VehicleState
 from AutoPilot.PlayerManager import PlayerManager
 from ExternVehicleLogicTessAuto import TessAutoPyInterface
@@ -46,8 +47,11 @@ MAX_DECEL = -5.0
 # ===== 配置 =====
 TRAIN_MODE = True
 TOTAL_TIMESTEPS = 50000
-MODEL_SAVE_DIR = "tessng_dqn"
 DATA_DIR = "Data"
+
+# 选择强化学习算法: "DQN" 或 "PPO"
+RL_ALGO = "PPO"
+MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
 
 
 class MySimulator(QObject, PyCustomerSimulator):
@@ -80,7 +84,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.egoState = None
 
         # 训练用 Gym 环境
-        self.env = TessngDrivingEnv(obs_dim=94)
+        if RL_ALGO == "PPO":
+            self.env = TessngDrivingEnvPPO(obs_dim=94)
+        else:
+            self.env = TessngDrivingEnv(obs_dim=94)
         self.env.resetCallback = self.doReset
         self.env.buildObsCallback = self.buildInitialObs
 
@@ -256,8 +263,6 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def runTraining(self):
-        from stable_baselines3 import DQN
-
         os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
         savePath = os.path.join(MODEL_SAVE_DIR, "model")
 
@@ -269,25 +274,43 @@ class MySimulator(QObject, PyCustomerSimulator):
             print(f"[训练] {numScenarios} 个场景, 总步数 {TOTAL_TIMESTEPS}")
             print(f"[训练] 每个场景 {stepsPerScenario} 步")
             print(f"[训练] 主车由选手 TestPlayer 控制")
-            print(f"[训练] 背景车由 DQN 控制，目标：干扰主车")
+            print(f"[训练] 背景车由 {RL_ALGO} 控制，目标：干扰主车")
             for i, s in enumerate(self.scenarios):
                 print(f"  [{i}] {s['file']}: {list(s['vehicles'].keys())}")
             print("=" * 60)
 
-            model = DQN(
-                "MlpPolicy",
-                self.env,
-                policy_kwargs=dict(net_arch=[256, 256]),
-                learning_rate=5e-4,
-                buffer_size=15000,
-                learning_starts=200,
-                batch_size=32,
-                gamma=0.8,
-                train_freq=1,
-                gradient_steps=1,
-                target_update_interval=50,
-                verbose=1,
-            )
+            if RL_ALGO == "PPO":
+                from stable_baselines3 import PPO
+                model = PPO(
+                    "MlpPolicy",
+                    self.env,
+                    policy_kwargs=dict(net_arch=[256, 256]),
+                    learning_rate=3e-4,
+                    n_steps=2048,
+                    batch_size=64,
+                    n_epochs=10,
+                    gamma=0.99,
+                    gae_lambda=0.95,
+                    clip_range=0.2,
+                    ent_coef=0.0,
+                    verbose=1,
+                )
+            else:
+                from stable_baselines3 import DQN
+                model = DQN(
+                    "MlpPolicy",
+                    self.env,
+                    policy_kwargs=dict(net_arch=[256, 256]),
+                    learning_rate=5e-4,
+                    buffer_size=15000,
+                    learning_starts=200,
+                    batch_size=32,
+                    gamma=0.8,
+                    train_freq=1,
+                    gradient_steps=1,
+                    target_update_interval=50,
+                    verbose=1,
+                )
 
             for i in range(numScenarios):
                 print(f"\n[训练] === 场景 {i}: {self.scenarios[i]['file']} ===")
@@ -305,7 +328,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 推理模式
         print("\n[推理] 初始化多车推理...")
-        self.multiInfer = MultiVehicleInference(savePath)
+        self.multiInfer = MultiVehicleInference(savePath, algo=RL_ALGO)
         for scenario in self.scenarios:
             prefix = scenario['file'].replace('.json', '')
             for name, info in scenario["vehicles"].items():
