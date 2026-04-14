@@ -46,12 +46,13 @@ MAX_DECEL = -7.0
 
 # ===== 配置 =====
 TRAIN_MODE = True
-TOTAL_TIMESTEPS = 100000
+TOTAL_TIMESTEPS = 500000
 DATA_DIR = "Data"
 
 # 选择强化学习算法: "DQN" 或 "PPO"
 RL_ALGO = "PPO"
 MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
+TENSORBOARD_LOG = "./tensorboard_logs/"
 
 
 class MySimulator(QObject, PyCustomerSimulator):
@@ -321,6 +322,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     clip_range=0.2,
                     ent_coef=0.0,
                     verbose=1,
+                    tensorboard_log=TENSORBOARD_LOG
                 )
             else:
                 from stable_baselines3 import DQN
@@ -338,6 +340,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     gradient_steps=1,
                     target_update_interval=50,
                     verbose=1,
+                    tensorboard_log=TENSORBOARD_LOG
                 )
 
             for i in range(numScenarios):
@@ -434,8 +437,9 @@ class MySimulator(QObject, PyCustomerSimulator):
         """所有背景车根据角色(主攻手/NPC)执行动作推进"""
         accel, steer = control
         
-        # 调试输出当前动作，排查 steer 极值问题
-        # print(f"[Debug] Training Action: accel={accel:.2f}, steer={steer:.2f}")
+        # 调试输出当前动作，监控 PPO 输出的加速度和方向盘转角
+        if getattr(self, "_attacker_name", None):
+            print(f"[Action] {self._attacker_name} -> accel: {accel:.2f}, steer: {steer:.2f}")
 
         vsMap = {}
         for name, agent in self.bgAgents.items():
@@ -527,28 +531,37 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def buildObs(self, bgVehicle, vehicles) -> np.ndarray:
         obs = np.zeros(94, dtype=np.float32)
-        bgName = list(self.bgAgents.keys())[0] if self.bgAgents else None
-        if bgName is None:
+        attacker_name = getattr(self, "_attacker_name", None)
+        if attacker_name is None or attacker_name not in self.bgAgents:
             return obs
-        agent = self.bgAgents[bgName]
+        agent = self.bgAgents[attacker_name]
 
         # 背景车自身状态
         laneResult = LaneProjector.fromTessngVehicle(bgVehicle, p2m)
         if laneResult:
             obs[0] = np.clip(laneResult.dist_left / MAX_LANE_WIDTH, 0, 1)
             obs[1] = np.clip(laneResult.dist_right / MAX_LANE_WIDTH, 0, 1)
-            obs[2] = np.clip(laneResult.lateral_offset / MAX_LANE_WIDTH + 0.5, 0, 1)
+            # 车道偏移 [-L_width/2, L_width/2] -> [0, 1]，中心为 0.5
+            obs[2] = np.clip((laneResult.lateral_offset / MAX_LANE_WIDTH) + 0.5, 0, 1)
+            # 角度差归一化 [0, 1]，0.5代表完全平行
             obs[3] = laneResult.angle_diff
 
         obs[4] = np.clip(agent["speed"] / MAX_SPEED, 0, 1)
-        obs[5] = np.clip(self.currentControl[1] / (2 * MAX_STEER_ANGLE) + 0.5, 0, 1)
+        # 转向角: [-MAX_STEER_ANGLE, MAX_STEER_ANGLE] -> [0, 1]，0.5 是回正
+        obs[5] = np.clip((self.currentControl[1] / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
+
+        # 加速度：[MAX_DECEL, MAX_ACCEL] -> [0, 1]
         obs[6] = np.clip(
             (self.currentControl[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1
         )
-        obs[7] = np.clip(self.prevSteer / (2 * MAX_STEER_ANGLE) + 0.5, 0, 1)
+
+        obs[7] = np.clip((self.prevSteer / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
         self.prevSteer = self.currentControl[1]
+
+        # 角速度映射 [-MAX_YAW_RATE, MAX_YAW_RATE] -> [0, 1]
+        MAX_YAW_RATE = 1.0
         yawRate = self.yawRateCalc.update(bgVehicle.id(), bgVehicle.angle(), self.dt)
-        obs[8] = self.yawRateCalc.normalize(yawRate)
+        obs[8] = np.clip((yawRate / (2 * MAX_YAW_RATE)) + 0.5, 0, 1)
 
         # 导航
         centerLine = agent["smoothed"]
