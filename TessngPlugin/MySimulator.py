@@ -426,6 +426,10 @@ class MySimulator(QObject, PyCustomerSimulator):
     def applyBgActions(self, control):
         """所有背景车使用同一个 action 推进"""
         accel, steer = control
+        
+        # 调试输出当前动作，排查 steer 极值问题
+        # print(f"[Debug] Training Action: accel={accel:.2f}, steer={steer:.2f}")
+
         vsMap = {}
         for name, agent in self.bgAgents.items():
             s = agent["smoothed"]
@@ -438,8 +442,10 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             x, y, heading = self._posOnPath(s, agent["progress"])
             
-            # [未来扩展] 如果引入了横向 steer 控制，可以根据 steer 修改下面的 x, y
-            # 目前严格锁定在预设路径上
+            # [未来扩展] 因为背景车目前只受进度(progress)也就是加速度(accel)的影响，
+            # steer 动作对状态更新完全没有作用，所以没有任何奖惩梯度传给 steer。
+            # 这会导致神经网络初始化偏差或训练随机漂移最终饱和在最大/最小值(0.7或-0.7)。
+            # 如果需要 steer 生效，必须让 x, y 的更新脱离预设路径的硬绑定。
             agent["x"] = x
             agent["y"] = y
             agent["prevHeading"] = heading
@@ -585,7 +591,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             )
             
             if is_collide:
-                reward += 50.0
+                reward += 15.0  # 调低碰撞奖励，避免过拟合于单纯的碰撞而忽略过程
                 self._is_collision = True
                 agent_rewards.append(reward)
                 continue
@@ -598,13 +604,20 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             # 5. 速度与位置配合奖励
             if forwardDist < 0:
-                # 在后方：追赶
+                # 背景车在主车后方：追赶
                 if speedDiff > 0:
                     reward += min(speedDiff / 10.0, 0.2)
+                else:
+                    # 在后面还比主车慢，加大惩罚
+                    reward -= min(abs(speedDiff) / 5.0, 0.5)
             else:
-                # 在前方：阻挡/压车
+                # 背景车在主车前方：阻挡/压车
                 if speedDiff < 0:
-                    reward += min(abs(speedDiff) / 10.0, 0.2)
+                    # 背景车速度比主车慢，这是期望的（压车）
+                    reward += min(abs(speedDiff) / 10.0, 0.3)
+                else:
+                    # 背景车在主车前面，且速度比主车快（逃跑），应该被惩罚
+                    reward -= min(speedDiff / 5.0, 0.5)
 
             # 6. 卡位奖励
             if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
