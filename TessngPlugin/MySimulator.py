@@ -35,7 +35,7 @@ from Utils.NavigationCalculator import NavigationCalculator
 from Utils.SurroundingCalculator import SurroundingCalculator
 from Utils.YawRateCalculator import YawRateCalculator
 from ScenarioLoader import ScenarioLoader
-from MultiVehicleInference import MultiVehicleInference
+from MultiVehicleInference import MultiVehicleInference,WHEEL_BASE
 
 # 归一化常量
 MAX_LANE_WIDTH = 4.0
@@ -437,19 +437,23 @@ class MySimulator(QObject, PyCustomerSimulator):
                 continue
             agent["speed"] += accel * self.dt
             agent["speed"] = max(0.0, min(agent["speed"], MAX_SPEED))
+            
+            # 引入车辆运动学模型 (Kinematic Bicycle Model，自动驾驶中用于模拟四轮小汽车的经典单辙模型)
+            # 假设小汽车轴距为 2.8 米
+            yaw_rate = (agent["speed"] * math.tan(steer)) / WHEEL_BASE
+            
+            agent["prevHeading"] = agent.get("heading", agent["prevHeading"])
+            agent["heading"] = (agent["prevHeading"] + math.degrees(yaw_rate * self.dt)) % 360.0
+            
+            heading_rad = math.radians(agent["heading"])
+            # Tessng GUI坐标：dx = sin(heading), dy = cos(heading)
+            agent["x"] += agent["speed"] * math.sin(heading_rad) * self.dt
+            agent["y"] += agent["speed"] * math.cos(heading_rad) * self.dt
+            
             agent["progress"] += agent["speed"] * self.dt
             agent["progress"] = min(agent["progress"], agent["totalLength"])
 
-            x, y, heading = self._posOnPath(s, agent["progress"])
-            
-            # [未来扩展] 因为背景车目前只受进度(progress)也就是加速度(accel)的影响，
-            # steer 动作对状态更新完全没有作用，所以没有任何奖惩梯度传给 steer。
-            # 这会导致神经网络初始化偏差或训练随机漂移最终饱和在最大/最小值(0.7或-0.7)。
-            # 如果需要 steer 生效，必须让 x, y 的更新脱离预设路径的硬绑定。
-            agent["x"] = x
-            agent["y"] = y
-            agent["prevHeading"] = heading
-            vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+            vsMap[name] = VehicleState(x=agent["x"], y=agent["y"], heading=agent["heading"], speed=agent["speed"])
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
     # ============================================================
@@ -464,7 +468,21 @@ class MySimulator(QObject, PyCustomerSimulator):
             info = self.currentVehicles.get(name, {})
             agent["speed"] = info.get("speed", 10.0)
             agent["progress"] = 0.0
-            agent["prevHeading"] = 0.0
+            
+            # 重新获取起点坐标和航向
+            smoothed = agent["smoothed"]
+            init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
+            if len(smoothed) >= 2:
+                dx = smoothed[1][0] - smoothed[0][0]
+                dy = smoothed[1][1] - smoothed[0][1]
+                init_heading = math.degrees(math.atan2(dx, dy)) % 360.0
+            else:
+                init_heading = 0.0
+                
+            agent["prevHeading"] = init_heading
+            agent["heading"] = init_heading
+            agent["x"] = init_x
+            agent["y"] = init_y
         self.isFirstStep = True
 
         # [优化] 在重置环境时，重新加载选手。确保 Ego 在每次 Episode 都重置进度和状态。
@@ -544,6 +562,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             return 0.0
 
         self._is_collision = False
+        self._is_out_of_bounds = False
         agent_rewards = []
 
         egoX = self.egoState.x
@@ -660,8 +679,11 @@ class MySimulator(QObject, PyCustomerSimulator):
                 # 稍微偏离中心线，施加线性惩罚
                 reward -= path_deviation * 0.5
             if path_deviation > 2.0:
-                # 严重偏离（如冲出车道），施加重罚
-                reward -= 5.0
+                # 严重偏离（如冲出车道），施加致命重罚并结束
+                reward -= 50.0
+                self._is_out_of_bounds = True
+                agent_rewards.append(reward)
+                continue
 
             agent_rewards.append(reward)
 
@@ -677,6 +699,11 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 1. 任意一辆背景车发生碰撞，干扰成功
         if getattr(self, "_is_collision", False):
             print(f"[Done] 发生碰撞! 干扰任务圆满完成。")
+            return True
+            
+        # 1.5 任意一辆背景车严重偏离车道，干扰失败
+        if getattr(self, "_is_out_of_bounds", False):
+            print(f"[Done] 严重偏离车道! 干扰失败。")
             return True
 
         # 2. 达到最大步数

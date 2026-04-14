@@ -42,6 +42,8 @@ ACTION_TO_CONTROL = {
     4: (-3.0, 0.0),
 }
 
+# 假设小汽车轴距为 2.8 米
+WHEEL_BASE = 2.8
 
 @dataclass
 class VehicleAgent:
@@ -211,6 +213,17 @@ class MultiVehicleInference:
             agent.speed = max(0.0, min(agent.speed, MAX_SPEED))
 
             # 4. 推进
+            # 脱离预设路径的硬绑定，使用 steer
+            # 引入车辆运动学模型 (Kinematic Bicycle Model，自动驾驶中用于模拟四轮小汽车的经典单辙模型)
+            # 假设小汽车轴距为 2.8 米
+            yaw_rate = (agent.speed * math.tan(steer)) / WHEEL_BASE
+            agent.prevHeading = agent.heading
+            agent.heading = (agent.prevHeading + math.degrees(yaw_rate * dt)) % 360.0
+            
+            heading_rad = math.radians(agent.heading)
+            agent.x += agent.speed * math.sin(heading_rad) * dt
+            agent.y += agent.speed * math.cos(heading_rad) * dt
+
             agent.progress += agent.speed * dt
 
             # 5. 到终点
@@ -218,18 +231,18 @@ class MultiVehicleInference:
                 agent.progress = agent.totalLength
                 agent.alive = False
 
-            # 6. 定位
-            x, y, heading = self._posOnPath(agent.smoothedPath, agent.progress)
-            agent.x = x
-            agent.y = y
-            agent.heading = heading
-            agent.prevHeading = heading
+            # 6. 定位 (不再强制从路径读取坐标)
+            # x, y, heading = self._posOnPath(agent.smoothedPath, agent.progress)
+            # agent.x = x
+            # agent.y = y
+            # agent.heading = heading
+            # agent.prevHeading = heading
 
             # 7. 输出（JSON 里 y 已是 GUI 坐标，不需要反转）
             results[name] = {
-                "x": x,
-                "y": y,
-                "heading": heading,
+                "x": agent.x,
+                "y": agent.y,
+                "heading": agent.heading,
                 "speed": agent.speed,
             }
 
