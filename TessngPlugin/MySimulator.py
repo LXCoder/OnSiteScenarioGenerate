@@ -272,6 +272,10 @@ class MySimulator(QObject, PyCustomerSimulator):
             print("[推理] 所有背景车到达终点，重置")
             self.multiInfer.resetAll()
             self._inferCreated = False
+            
+            # [修复] 在推理模式下重置时，也要重置主车(Ego)的状态
+            if hasattr(self, "playerManager"):
+                self.playerManager.load_all()
 
     # ============================================================
     #  训练线程
