@@ -153,13 +153,14 @@ class MySimulator(QObject, PyCustomerSimulator):
         # ===== 每帧更新主车（选手控制） =====
         self.updateEgo()
 
-        # 推理模式
+        # 推理模式（multiInfer 已初始化）
         if self.multiInfer is not None:
             self._afterOneStepInference(vehicles)
             return
 
-        # 训练模式
-        self._afterOneStepTraining(vehicles)
+        # 训练模式（env 未关闭时才走训练逻辑）
+        if not self.env._closed:
+            self._afterOneStepTraining(vehicles)
 
     # ============================================================
     #  主车更新（每帧调用选手的 act）
@@ -341,6 +342,13 @@ class MySimulator(QObject, PyCustomerSimulator):
         else:
             print("[训练] Data 目录无 JSON 文件")
             return
+        
+        # 切换到推理模式前，关闭 env 解除可能的阻塞
+        self.env.close()
+
+        # 等一小会让 afterOneStep 从阻塞中退出
+        import time
+        time.sleep(0.5)
 
         # 推理模式
         print("\n[推理] 初始化多车推理...")
@@ -353,11 +361,10 @@ class MySimulator(QObject, PyCustomerSimulator):
                 )
 
         self._inferCreated = False
+        self.isFirstStep = False  # 推理模式不需要走 onFirstStep
 
-        while not self.env._closed:
-            import time
-
-            time.sleep(1.0)
+        # 训练线程完成，不需要保持活着
+        print("[推理] 训练线程退出，推理由 afterOneStep 主线程驱动")
 
     # ============================================================
     #  场景管理
