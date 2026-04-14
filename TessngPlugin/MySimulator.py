@@ -45,7 +45,7 @@ MAX_ACCEL = 7.0
 MAX_DECEL = -7.0
 
 # ===== 配置 =====
-TRAIN_MODE = False
+TRAIN_MODE = True
 TOTAL_TIMESTEPS = 100000
 DATA_DIR = "Data"
 
@@ -216,7 +216,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
 
         obs = self.buildObs(bgVehicle, vehicles)
-        reward = self.computeReward()
+        reward = self.computeReward(bgVehicle)
         done = self.checkDone()
 
         self.episodeReward += reward
@@ -582,7 +582,7 @@ class MySimulator(QObject, PyCustomerSimulator):
     #  奖励（背景车视角，鼓励干扰主车）
     # ============================================================
 
-    def computeReward(self) -> float:
+    def computeReward(self, bgVehicle) -> float:
         """
         计算奖励：只为当前回合被选为“主攻手”的背景车计算奖励。
         """
@@ -592,6 +592,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         self._is_collision = False
         self._is_out_of_bounds = False
+        self._is_wrong_way = False
 
         egoX = self.egoState.x
         egoY = self.egoState.y
@@ -605,30 +606,22 @@ class MySimulator(QObject, PyCustomerSimulator):
         reward += 0.05
 
         # 1.5 行驶距离(进度)奖励
-        # 根据当前步的进度增量给予奖励，鼓励车辆往前开
         progressThisStep = agent["speed"] * self.dt
         reward += min(progressThisStep / 2.0, 0.2)
 
-        # 2. 相对位置与速度计算
-        bgX, bgY, bgHeading = self._posOnPath(agent["smoothed"], agent["progress"])
-        dx = bgX - egoX
-        dy = bgY - egoY
+        # 2. 相对位置与速度计算 (使用真实的物理坐标)
+        actual_x = agent.get("x", 0.0)
+        actual_y = agent.get("y", 0.0)
+        actual_heading = agent.get("heading", 0.0)
+        
+        # 为了计算路径偏差和期望方向，在期望进度上找到路径上的点
+        bgX, bgY, expectedHeading = self._posOnPath(agent["smoothed"], agent["progress"])
+        
+        dx = actual_x - egoX
+        dy = actual_y - egoY
         distToEgo = math.sqrt(
-            (p2m(bgX) - p2m(egoX)) ** 2 + (p2m(bgY) - p2m(egoY)) ** 2
+            (p2m(actual_x) - p2m(egoX)) ** 2 + (p2m(actual_y) - p2m(egoY)) ** 2
         )
-        debug_msg = "主车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 背景车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 距离: {:.2f}m".format(
-                egoX,
-                egoY,
-                p2m(egoX),
-                p2m(egoY),
-                bgX,
-                bgY,
-                p2m(bgX),
-                p2m(bgY),
-                distToEgo,
-            )
-            # if name == "car_2":
-            #     print(debug_msg)
 
         # 投影到主车坐标系
         forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
@@ -638,7 +631,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 3. 碰撞判定 (核心成功条件: Bounding Box 碰撞检测)
         # 假设车辆标准尺寸：长 4.8m，宽 2.0m
         is_collide = self._check_bbox_collision(
-            bgX, bgY, bgHeading, 4.8, 2.0,
+            actual_x, actual_y, actual_heading, 4.8, 2.0,
             egoX, egoY, self.egoState.heading, 4.8, 2.0
         )
         
@@ -701,20 +694,69 @@ class MySimulator(QObject, PyCustomerSimulator):
         if hDiff > 3.0: 
             reward -= min(hDiff / 10.0, 1.0) # 增大画龙惩罚力度
 
-        # 8.4 偏离预设路径过远惩罚 (如果偏离太多说明动作失控)
-        # 真实位置与期望路径点(bgX, bgY)的距离即为偏差
-        actual_x = agent.get("x", bgX)
-        actual_y = agent.get("y", bgY)
-        path_deviation = math.hypot(actual_x - bgX, actual_y - bgY)
+        # 8.3.5 转向平滑惩罚 (直接约束 steer 动作，避免猛打方向盘)
+        accel, steer = self.currentControl
         
-        if path_deviation > 0.5:
-            # 稍微偏离中心线，施加线性惩罚
-            reward -= path_deviation * 0.5
-        if path_deviation > 2.0:
-            # 严重偏离（如冲出车道），施加致命重罚并结束
+        # 绝对转向惩罚：微小惩罚，鼓励在没必要时保持直行
+        reward -= abs(steer) * 0.2
+        
+        # 转向变化率惩罚：严惩短时间内方向盘突变
+        prev_steer = agent.get("prev_steer", 0.0)
+        steer_diff = abs(steer - prev_steer)
+        if steer_diff > 0.05:
+            reward -= steer_diff * 5.0  # 变化越剧烈，惩罚越大
+            
+        agent["prev_steer"] = steer
+
+        # 8.4 偏离预设路径过远惩罚 (改用真实的 TESSNG 车道偏离检测)
+        laneResult = LaneProjector.fromTessngVehicle(bgVehicle, p2m)
+        if laneResult:
+            offsetAbs = abs(laneResult.lateral_offset)
+            if offsetAbs > 0.5:
+                # 稍微偏离中心线，施加线性惩罚
+                reward -= offsetAbs * 0.5
+            if offsetAbs > 2.5:
+                # 严重偏离（如冲出车道），施加致命重罚并结束
+                reward -= 50.0
+                self._is_out_of_bounds = True
+                return reward
+        else:
+            # 如果脱离了路网导致无法投影，直接算作越界
             reward -= 50.0
             self._is_out_of_bounds = True
             return reward
+
+        # 8.5 逆行与对向车道惩罚 (车头方向与预期路径方向相反)
+        path_heading_err = abs(actual_heading - expectedHeading)
+        if path_heading_err > 180:
+            path_heading_err = 360 - path_heading_err
+            
+        if path_heading_err > 90.0:
+            # 严重逆行或掉头，施加致命重罚并结束
+            reward -= 50.0
+            self._is_wrong_way = True
+            return reward
+        elif path_heading_err > 45.0:
+            # 偏离方向过大，可能在横向漂移，施加惩罚
+            reward -= (path_heading_err - 45.0) / 45.0 * 2.0
+
+        # 9. 追踪瞄准奖励 (极大加速 steer 的学习)
+        # 计算背景车指向主车的角度
+        dx_ego_att = egoX - actual_x
+        dy_ego_att = egoY - actual_y
+        angle_to_ego = math.degrees(math.atan2(dx_ego_att, dy_ego_att)) % 360.0
+        
+        heading_err_ego = abs(actual_heading - angle_to_ego)
+        if heading_err_ego > 180: 
+            heading_err_ego = 360 - heading_err_ego
+            
+        # 投影到主攻手坐标系，判断主车是否在主攻手前方
+        attHeadingRad = math.radians(90.0 - actual_heading)
+        att_forwardDist = dx_ego_att * math.cos(attHeadingRad) + dy_ego_att * math.sin(attHeadingRad)
+        
+        # 只有当主车在主攻手前方 (att_forwardDist > 0) 时，才鼓励瞄准主车
+        if distToEgo < 30.0 and att_forwardDist > 0:
+            reward += (1.0 - heading_err_ego / 45.0) * 0.5
 
         return reward
 
@@ -731,6 +773,11 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 1.5 严重偏离车道，干扰失败
         if getattr(self, "_is_out_of_bounds", False):
             print("[Done] 主攻手严重偏离车道! 干扰失败。")
+            return True
+
+        # 1.6 逆行或掉头，干扰失败
+        if getattr(self, "_is_wrong_way", False):
+            print("[Done] 主攻手逆行或掉头! 干扰失败。")
             return True
 
         # 2. 达到最大步数
