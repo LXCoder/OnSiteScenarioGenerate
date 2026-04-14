@@ -45,7 +45,7 @@ MAX_ACCEL = 7.0
 MAX_DECEL = -7.0
 
 # ===== 配置 =====
-TRAIN_MODE = True
+TRAIN_MODE = False
 TOTAL_TIMESTEPS = 100000
 DATA_DIR = "Data"
 
@@ -193,8 +193,15 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 找主车和所有背景车
         egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
-        # 找任意一辆背景车作为观测基准
-        bgVehicle = bgVehicles[0] if bgVehicles else None
+        
+        # 找到指定的“主攻手”作为观测基准
+        bgVehicle = None
+        for v in bgVehicles:
+            avName = self.tessAuto.tessngId2AvNameMap.get(v.id())
+            if avName == getattr(self, "_attacker_name", None):
+                bgVehicle = v
+                break
+                
         if bgVehicle is None:
             return
 
@@ -424,7 +431,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.tessAuto.vehicleCreate()
 
     def applyBgActions(self, control):
-        """所有背景车使用同一个 action 推进"""
+        """所有背景车根据角色(主攻手/NPC)执行动作推进"""
         accel, steer = control
         
         # 调试输出当前动作，排查 steer 极值问题
@@ -435,23 +442,37 @@ class MySimulator(QObject, PyCustomerSimulator):
             s = agent["smoothed"]
             if len(s) < 2:
                 continue
-            agent["speed"] += accel * self.dt
-            agent["speed"] = max(0.0, min(agent["speed"], MAX_SPEED))
-            
-            # 引入车辆运动学模型 (Kinematic Bicycle Model，自动驾驶中用于模拟四轮小汽车的经典单辙模型)
-            # 假设小汽车轴距为 2.8 米
-            yaw_rate = (agent["speed"] * math.tan(steer)) / WHEEL_BASE
-            
-            agent["prevHeading"] = agent.get("heading", agent["prevHeading"])
-            agent["heading"] = (agent["prevHeading"] + math.degrees(yaw_rate * self.dt)) % 360.0
-            
-            heading_rad = math.radians(agent["heading"])
-            # Tessng GUI坐标：dx = sin(heading), dy = cos(heading)
-            agent["x"] += agent["speed"] * math.sin(heading_rad) * self.dt
-            agent["y"] += agent["speed"] * math.cos(heading_rad) * self.dt
-            
-            agent["progress"] += agent["speed"] * self.dt
-            agent["progress"] = min(agent["progress"], agent["totalLength"])
+                
+            if name == getattr(self, "_attacker_name", None):
+                # ===== 主攻手：由强化学习完全接管 =====
+                agent["speed"] += accel * self.dt
+                agent["speed"] = max(0.0, min(agent["speed"], MAX_SPEED))
+                
+                # 引入车辆运动学模型 (Kinematic Bicycle Model，自动驾驶中用于模拟四轮小汽车的经典单辙模型)
+                # 假设小汽车轴距为 2.8 米
+                wheelbase = getattr(self, "WHEEL_BASE", 2.8)
+                yaw_rate = (agent["speed"] * math.tan(steer)) / wheelbase
+                
+                agent["prevHeading"] = agent.get("heading", agent["prevHeading"])
+                agent["heading"] = (agent["prevHeading"] + math.degrees(yaw_rate * self.dt)) % 360.0
+                
+                heading_rad = math.radians(agent["heading"])
+                # Tessng GUI坐标：dx = sin(heading), dy = cos(heading)
+                agent["x"] += agent["speed"] * math.sin(heading_rad) * self.dt
+                agent["y"] += agent["speed"] * math.cos(heading_rad) * self.dt
+                
+                agent["progress"] += agent["speed"] * self.dt
+                agent["progress"] = min(agent["progress"], agent["totalLength"])
+            else:
+                # ===== NPC：恒定速度巡航，严格跟随路径 =====
+                agent["progress"] += agent["speed"] * self.dt
+                agent["progress"] = min(agent["progress"], agent["totalLength"])
+
+                x, y, heading = self._posOnPath(s, agent["progress"])
+                agent["x"] = x
+                agent["y"] = y
+                agent["heading"] = heading
+                agent["prevHeading"] = heading
 
             vsMap[name] = VehicleState(x=agent["x"], y=agent["y"], heading=agent["heading"], speed=agent["speed"])
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
@@ -484,6 +505,14 @@ class MySimulator(QObject, PyCustomerSimulator):
             agent["x"] = init_x
             agent["y"] = init_y
         self.isFirstStep = True
+
+        # [新增] 随机选择一辆背景车作为本回合的“主攻手”
+        import random
+        if self.bgAgents:
+            self._attacker_name = random.choice(list(self.bgAgents.keys()))
+        else:
+            self._attacker_name = None
+        print(f"\n[Reset] 随机分配主攻手: {self._attacker_name}")
 
         # [优化] 在重置环境时，重新加载选手。确保 Ego 在每次 Episode 都重置进度和状态。
         if hasattr(self, "playerManager"):
@@ -555,35 +584,39 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def computeReward(self) -> float:
         """
-        计算奖励：遍历所有背景车，取其中的最高奖励作为当前步的反馈。
-        这鼓励至少有一辆背景车能成功执行干扰任务。
+        计算奖励：只为当前回合被选为“主攻手”的背景车计算奖励。
         """
-        if not self.bgAgents or self.egoState is None:
+        attacker_name = getattr(self, "_attacker_name", None)
+        if not self.bgAgents or self.egoState is None or attacker_name not in self.bgAgents:
             return 0.0
 
         self._is_collision = False
         self._is_out_of_bounds = False
-        agent_rewards = []
 
         egoX = self.egoState.x
         egoY = self.egoState.y
         egoSpeed = self.egoState.speed
         egoHeadingRad = math.radians(90.0 - self.egoState.heading)
 
-        for name, agent in self.bgAgents.items():
-            reward = 0.0
+        agent = self.bgAgents[attacker_name]
+        reward = 0.0
 
-            # 1. 基础存活奖励
-            reward += 0.05
+        # 1. 基础存活奖励
+        reward += 0.05
 
-            # 2. 相对位置与速度计算
-            bgX, bgY, bgHeading = self._posOnPath(agent["smoothed"], agent["progress"])
-            dx = bgX - egoX
-            dy = bgY - egoY
-            distToEgo = math.sqrt(
-                (p2m(bgX) - p2m(egoX)) ** 2 + (p2m(bgY) - p2m(egoY)) ** 2
-            )
-            debug_msg = "主车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 背景车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 距离: {:.2f}m".format(
+        # 1.5 行驶距离(进度)奖励
+        # 根据当前步的进度增量给予奖励，鼓励车辆往前开
+        progressThisStep = agent["speed"] * self.dt
+        reward += min(progressThisStep / 2.0, 0.2)
+
+        # 2. 相对位置与速度计算
+        bgX, bgY, bgHeading = self._posOnPath(agent["smoothed"], agent["progress"])
+        dx = bgX - egoX
+        dy = bgY - egoY
+        distToEgo = math.sqrt(
+            (p2m(bgX) - p2m(egoX)) ** 2 + (p2m(bgY) - p2m(egoY)) ** 2
+        )
+        debug_msg = "主车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 背景车位置: ({:.2f}, {:.2f}) ({:.2f}, {:.2f}), 距离: {:.2f}m".format(
                 egoX,
                 egoY,
                 p2m(egoX),
@@ -597,143 +630,128 @@ class MySimulator(QObject, PyCustomerSimulator):
             # if name == "car_2":
             #     print(debug_msg)
 
-            # 投影到主车坐标系
-            forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
-            lateralDist = -dx * math.sin(egoHeadingRad) + dy * math.cos(egoHeadingRad)
-            speedDiff = agent["speed"] - egoSpeed
+        # 投影到主车坐标系
+        forwardDist = dx * math.cos(egoHeadingRad) + dy * math.sin(egoHeadingRad)
+        lateralDist = -dx * math.sin(egoHeadingRad) + dy * math.cos(egoHeadingRad)
+        speedDiff = agent["speed"] - egoSpeed
 
-            # 3. 碰撞判定 (核心成功条件: Bounding Box 碰撞检测)
-            # 假设车辆标准尺寸：长 4.8m，宽 2.0m
-            is_collide = self._check_bbox_collision(
-                bgX, bgY, bgHeading, 4.8, 2.0,
-                egoX, egoY, self.egoState.heading, 4.8, 2.0
-            )
-            
-            if is_collide:
-                reward += 15.0  # 调低碰撞奖励，避免过拟合于单纯的碰撞而忽略过程
-                self._is_collision = True
-                agent_rewards.append(reward)
-                continue
+        # 3. 碰撞判定 (核心成功条件: Bounding Box 碰撞检测)
+        # 假设车辆标准尺寸：长 4.8m，宽 2.0m
+        is_collide = self._check_bbox_collision(
+            bgX, bgY, bgHeading, 4.8, 2.0,
+            egoX, egoY, self.egoState.heading, 4.8, 2.0
+        )
+        
+        if is_collide:
+            reward += 15.0  # 调低碰撞奖励，避免过拟合于单纯的碰撞而忽略过程
+            self._is_collision = True
+            return reward
 
-            # 4. 距离诱导奖励
-            if distToEgo < 10.0:
-                reward += 1.0 * (1.0 - distToEgo / 10.0)
-            elif distToEgo < 25.0:
-                reward += 0.3 * (1.0 - distToEgo / 25.0)
+        # 4. 距离诱导奖励
+        if distToEgo < 10.0:
+            reward += 1.0 * (1.0 - distToEgo / 10.0)
+        elif distToEgo < 25.0:
+            reward += 0.3 * (1.0 - distToEgo / 25.0)
 
-            # 5. 速度与位置配合奖励
-            if forwardDist < 0:
-                # 背景车在主车后方：追赶
-                if speedDiff > 0:
-                    reward += min(speedDiff / 10.0, 0.2)
-                else:
-                    # 在后面还比主车慢，加大惩罚
-                    reward -= min(abs(speedDiff) / 5.0, 0.5)
+        # 5. 速度与位置配合奖励
+        if forwardDist < 0:
+            # 背景车在主车后方：追赶
+            if speedDiff > 0:
+                reward += min(speedDiff / 10.0, 0.2)
             else:
-                # 背景车在主车前方：阻挡/压车
-                if speedDiff < 0:
-                    # 背景车速度比主车慢，这是期望的（压车）
-                    reward += min(abs(speedDiff) / 10.0, 0.3)
-                else:
-                    # 背景车在主车前面，且速度比主车快（逃跑），应该被惩罚
-                    reward -= min(speedDiff / 5.0, 0.5)
+                # 在后面还比主车慢，加大惩罚
+                reward -= min(abs(speedDiff) / 5.0, 0.5)
+        else:
+            # 背景车在主车前方：阻挡/压车
+            if speedDiff < 0:
+                # 背景车速度比主车慢，这是期望的（压车）
+                reward += min(abs(speedDiff) / 10.0, 0.3)
+            else:
+                # 背景车在主车前面，且速度比主车快（逃跑），应该被惩罚
+                reward -= min(speedDiff / 5.0, 0.5)
 
-            # 6. 卡位奖励
-            if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
+        # 6. 卡位奖励
+        if 0 < forwardDist < 15.0 and abs(lateralDist) < 2.0:
+            reward += 0.5
+            if egoSpeed > agent["speed"] + 1.0:
                 reward += 0.5
-                if egoSpeed > agent["speed"] + 1.0:
-                    reward += 0.5
 
-            # 7. 侧向挤压
-            if -5.0 < forwardDist < 5.0 and 1.5 < abs(lateralDist) < 4.0:
-                reward += 0.2 * (4.0 - abs(lateralDist))
+        # 7. 侧向挤压
+        if -5.0 < forwardDist < 5.0 and 1.5 < abs(lateralDist) < 4.0:
+            reward += 0.2 * (4.0 - abs(lateralDist))
 
-            # 8. 惩罚项增强
-            # 8.1 停车惩罚 (避免原地发呆，除非距离主车很远)
-            if agent["speed"] < 0.5 and distToEgo > 10.0:
-                reward -= 0.5
-                
-            # 8.2 远离主车惩罚 (如果距离太远且还在变远)
-            if distToEgo > 30.0:
-                reward -= 0.2  # 距离太远本身就是一个小惩罚
-                if speedDiff < 0 and forwardDist > 0:
-                    # 主车在后面，但背景车跑得比主车还快，导致距离拉大
-                    reward -= 0.5
-                elif speedDiff > 0 and forwardDist < 0:
-                    # 主车在前面，但背景车跑得比主车慢，导致距离拉大
-                    reward -= 0.5
-
-            # 8.3 剧烈画龙惩罚 (防止无意义的蛇形走位)
-            hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
-            if hDiff > 180: hDiff = 360 - hDiff
-            if hDiff > 3.0: 
-                reward -= min(hDiff / 10.0, 1.0) # 增大画龙惩罚力度
-
-            # 8.4 偏离预设路径过远惩罚 (如果偏离太多说明动作失控)
-            # 真实位置与期望路径点(bgX, bgY)的距离即为偏差
-            actual_x = agent.get("x", bgX)
-            actual_y = agent.get("y", bgY)
-            path_deviation = math.hypot(actual_x - bgX, actual_y - bgY)
+        # 8. 惩罚项增强
+        # 8.1 停车惩罚 (避免原地发呆，除非距离主车很远)
+        if agent["speed"] < 0.5 and distToEgo > 10.0:
+            reward -= 0.5
             
-            if path_deviation > 0.5:
-                # 稍微偏离中心线，施加线性惩罚
-                reward -= path_deviation * 0.5
-            if path_deviation > 2.0:
-                # 严重偏离（如冲出车道），施加致命重罚并结束
-                reward -= 50.0
-                self._is_out_of_bounds = True
-                agent_rewards.append(reward)
-                continue
+        # 8.2 远离主车惩罚 (如果距离太远且还在变远)
+        if distToEgo > 30.0:
+            reward -= 0.2  # 距离太远本身就是一个小惩罚
+            if speedDiff < 0 and forwardDist > 0:
+                # 主车在后面，但背景车跑得比主车还快，导致距离拉大
+                reward -= 0.5
+            elif speedDiff > 0 and forwardDist < 0:
+                # 主车在前面，但背景车跑得比主车慢，导致距离拉大
+                reward -= 0.5
 
-            agent_rewards.append(reward)
+        # 8.3 剧烈画龙惩罚 (防止无意义的蛇形走位)
+        hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
+        if hDiff > 180: hDiff = 360 - hDiff
+        if hDiff > 3.0: 
+            reward -= min(hDiff / 10.0, 1.0) # 增大画龙惩罚力度
 
-        # 返回所有背景车中表现最好的那一辆的奖励
-        # print(f"agent_rewards: {agent_rewards}")
-        return max(agent_rewards) if agent_rewards else 0.0
+        # 8.4 偏离预设路径过远惩罚 (如果偏离太多说明动作失控)
+        # 真实位置与期望路径点(bgX, bgY)的距离即为偏差
+        actual_x = agent.get("x", bgX)
+        actual_y = agent.get("y", bgY)
+        path_deviation = math.hypot(actual_x - bgX, actual_y - bgY)
+        
+        if path_deviation > 0.5:
+            # 稍微偏离中心线，施加线性惩罚
+            reward -= path_deviation * 0.5
+        if path_deviation > 2.0:
+            # 严重偏离（如冲出车道），施加致命重罚并结束
+            reward -= 50.0
+            self._is_out_of_bounds = True
+            return reward
+
+        return reward
 
     # ============================================================
     #  终止判断
     # ============================================================
 
     def checkDone(self) -> bool:
-        # 1. 任意一辆背景车发生碰撞，干扰成功
+        # 1. 发生碰撞，干扰成功
         if getattr(self, "_is_collision", False):
-            print(f"[Done] 发生碰撞! 干扰任务圆满完成。")
+            print("[Done] 主攻手发生碰撞! 干扰任务圆满完成。")
             return True
             
-        # 1.5 任意一辆背景车严重偏离车道，干扰失败
+        # 1.5 严重偏离车道，干扰失败
         if getattr(self, "_is_out_of_bounds", False):
-            print(f"[Done] 严重偏离车道! 干扰失败。")
+            print("[Done] 主攻手严重偏离车道! 干扰失败。")
             return True
 
         # 2. 达到最大步数
         if self.stepCount >= 500:
             return True
 
-        # 3. 检查所有背景车的状态
-        all_finished = True
-        any_stuck = False
+        # 3. 检查主攻手状态
+        attacker_name = getattr(self, "_attacker_name", None)
+        if attacker_name and attacker_name in self.bgAgents:
+            agent = self.bgAgents[attacker_name]
+            if agent["progress"] >= agent["totalLength"]:
+                print("[Done] 主攻手到达终点。")
+                return True
 
-        for name, agent in self.bgAgents.items():
-            # 只要有一辆车还没跑完，就不算全部结束
-            if agent["progress"] < agent["totalLength"]:
-                all_finished = False
-
-            # 检查是否卡死 (由于是多车，只要有一辆车彻底卡死，可能场景就失效了)
             if agent["speed"] < 0.1:
                 agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
                 if agent["_stuck_count"] > 15:
-                    any_stuck = True
+                    print("[Done] 探测到主攻手卡死，重置。")
+                    return True
             else:
                 agent["_stuck_count"] = 0
-
-        # 如果所有车都跑完了，或者有车卡死了，终止 Episode
-        if all_finished:
-            print("[Done] 所有背景车均到达终点。")
-            return True
-        if any_stuck:
-            print("[Done] 探测到背景车卡死，重置。")
-            return True
 
         return False
 

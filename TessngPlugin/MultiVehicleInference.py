@@ -204,6 +204,7 @@ class MultiVehicleInference:
             if self.algo == "PPO":
                 # PPO 连续动作 [accel, steer]
                 accel, steer = float(action[0]), float(action[1])
+                print(f"[MultiInfer] {name} PPO 动作: accel={accel:.2f}, steer={steer:.2f}")
             else:
                 # DQN 离散动作索引 -> [accel, steer]
                 accel, steer = ACTION_TO_CONTROL[int(action)]
