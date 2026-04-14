@@ -597,7 +597,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def computeReward(self, bgVehicle) -> float:
         """
-        重构后的奖励函数：严格保持原有的截断逻辑。
+        归一化后的奖励函数：目标区间控制在 [-1, 1] 左右
         """
         attacker_name = getattr(self, "_attacker_name", None)
         if (
@@ -613,55 +613,45 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._is_out_of_bounds = False
         self._is_wrong_way = False
 
-        # 2. 预计算物理状态 (封装重复的三角函数计算)
+        # 2. 预计算物理状态
         s = self._prepare_state_info(agent)
 
-        # --- 开始计算奖励，注意顺序与原逻辑一致 ---
-
-        # 3. 基础与进度奖励 (累计起始分)
+        # 3. 基础与进度奖励 (归一化：max ~ 0.05)
         reward = self._reward_basic_and_progress(agent)
 
-        # 4. 碰撞判定 (核心成功条件：触发即返回)
+        # 4. 碰撞判定 (核心成功条件：截断至 +1.0)
         is_collide = self._check_bbox_collision(
-            s["actual_x"],
-            s["actual_y"],
-            s["actual_heading"],
-            4.8,
-            2.0,
-            s["ego_x"],
-            s["ego_y"],
-            s["ego_heading"],
-            4.8,
-            2.0,
+            s["actual_x"], s["actual_y"], s["actual_heading"], 4.8, 2.0,
+            s["ego_x"], s["ego_y"], s["ego_heading"], 4.8, 2.0,
         )
         if is_collide:
             self._is_collision = True
-            return reward + 15.0  # 立即返回碰撞奖励
+            return 1.0 
 
-        # 5. 交互奖励 (距离诱导、速度配合、卡位、瞄准)
+        # 5. 交互奖励 (归一化：max ~ 0.3)
         reward += self._reward_interaction(agent, s)
 
-        # 6. 控制平滑奖励 (画龙、转向惩罚)
+        # 6. 控制平滑奖励 (包含非线性转向惩罚，防止转圈)
         reward += self._reward_control_smoothness(agent)
 
-        # 7. 越界检测 (触发即返回)
+        # 7. 越界检测 (截断至 -1.0)
         lane_penalty, out_of_bounds = self._reward_lane_boundary(agent, bgVehicle)
         reward += lane_penalty
         if out_of_bounds:
             self._is_out_of_bounds = True
-            return reward  # 立即返回越界重罚
+            return -1.0 
 
-        # 8. 逆行检测 (触发即返回)
+        # 8. 逆行检测 (截断至 -1.0)
         wrong_way_penalty, is_wrong = self._reward_direction(agent, s)
         reward += wrong_way_penalty
         if is_wrong:
             self._is_wrong_way = True
-            return reward  # 立即返回逆行重罚
+            return -1.0
 
-        # 9. 状态惩罚 (停止、远离)
+        # 9. 状态惩罚
         reward += self._reward_static_penalties(s)
 
-        return reward
+        return float(np.clip(reward, -1.0, 1.0))
 
     # --- 逻辑拆解子函数 ---
 
@@ -692,114 +682,123 @@ class MySimulator(QObject, PyCustomerSimulator):
             "speedDiff": agent["speed"] - ego.speed,
             "dx": dx,
             "dy": dy,
+            "agent_speed":agent["speed"]
         }
 
     def _reward_basic_and_progress(self, agent) -> float:
-        """1. 基础与 1.5 进度奖励"""
-        r = 0.05
+        """基础活跃奖励与进度奖励"""
+        r = 0.005 
         progressThisStep = agent["speed"] * self.dt
-        r += min(progressThisStep / 2.0, 0.2)
+        r += min(progressThisStep / 20.0, 0.04) 
         return r
 
     def _reward_interaction(self, agent, s) -> float:
-        """4.距离诱导 + 5.速度配合 + 6.卡位 + 7.侧向挤压 + 9.瞄准奖励"""
+        """交互引导奖励 (归一化)"""
         r = 0.0
         dist = s["distToEgo"]
 
         # 距离诱导
         if dist < 10.0:
-            r += 1.0 * (1.0 - dist / 10.0)
+            r += 0.1 * (1.0 - dist / 10.0)
         elif dist < 25.0:
-            r += 0.3 * (1.0 - dist / 25.0)
+            r += 0.03 * (1.0 - dist / 25.0)
 
         # 速度与位置配合
-        if s["forwardDist"] < 0:  # 后方追赶
-            r += (
-                min(s["speedDiff"] / 10.0, 0.2)
-                if s["speedDiff"] > 0
-                else -min(abs(s["speedDiff"]) / 5.0, 0.5)
-            )
-        else:  # 前方压车
-            r += (
-                min(abs(s["speedDiff"]) / 10.0, 0.3)
-                if s["speedDiff"] < 0
-                else -min(s["speedDiff"] / 5.0, 0.5)
-            )
+        if s["forwardDist"] < 0:  
+            r += (min(s["speedDiff"] / 100.0, 0.02) if s["speedDiff"] > 0 
+                  else -min(abs(s["speedDiff"]) / 50.0, 0.05))
+        else: 
+            r += (min(abs(s["speedDiff"]) / 100.0, 0.03) if s["speedDiff"] < 0 
+                  else -min(s["speedDiff"] / 50.0, 0.05))
 
         # 卡位与挤压
         if 0 < s["forwardDist"] < 15.0 and abs(s["lateralDist"]) < 2.0:
-            r += 0.5 + (0.5 if s["ego_speed"] > agent["speed"] + 1.0 else 0)
-        if -5.0 < s["forwardDist"] < 5.0 and 1.5 < abs(s["lateralDist"]) < 4.0:
-            r += 0.2 * (4.0 - abs(s["lateralDist"]))
-
+            r += 0.05 + (0.05 if s["ego_speed"] > agent["speed"] + 1.0 else 0)
+        
         # 追踪瞄准
         dx_ego, dy_ego = s["ego_x"] - s["actual_x"], s["ego_y"] - s["actual_y"]
         angle_to_ego = math.degrees(math.atan2(dx_ego, dy_ego)) % 360.0
         h_err = abs(s["actual_heading"] - angle_to_ego)
-        if h_err > 180:
-            h_err = 360 - h_err
+        if h_err > 180: h_err = 360 - h_err
 
         attHeadingRad = math.radians(90.0 - s["actual_heading"])
-        att_forwardDist = dx_ego * math.cos(attHeadingRad) + dy_ego * math.sin(
-            attHeadingRad
-        )
+        att_forwardDist = dx_ego * math.cos(attHeadingRad) + dy_ego * math.sin(attHeadingRad)
         if dist < 30.0 and att_forwardDist > 0:
-            r += (1.0 - h_err / 45.0) * 0.5
+            r += (1.0 - h_err / 45.0) * 0.05
         return r
 
     def _reward_control_smoothness(self, agent) -> float:
-        """8.3 画龙惩罚 + 8.3.5 转向平滑"""
+        """
+        控制平滑与转向约束：
+        通过平方惩罚 (steer**2) 解决持续满打方向盘转圈的问题。
+        """
         r = 0.0
-        # 画龙
-        hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
-        if hDiff > 180:
-            hDiff = 360 - hDiff
-        if hDiff > 3.0:
-            r -= min(hDiff / 10.0, 1.0)
-
-        # 转向
         accel, steer = self.currentControl
-        r -= abs(steer) * 0.2
+        
+        # 1. 绝对转向惩罚：使用平方项，让大转角（如0.7）的惩罚远高于小转角
+        r -= (steer ** 2) * 0.2
+        
+        # 2. 转向变化率惩罚：防止高频抖动 (steer_diff)
         prev_steer = agent.get("prev_steer", 0.0)
         steer_diff = abs(steer - prev_steer)
-        if steer_diff > 0.05:
-            r -= steer_diff * 5.0
+        if steer_diff > 0.02:
+            r -= steer_diff * 0.5
         agent["prev_steer"] = steer
+
+        # 3. 航向变化惩罚 (画龙)
+        hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
+        if hDiff > 180: hDiff = 360 - hDiff
+        if hDiff > 3.0:
+            r -= min(hDiff / 50.0, 0.1)
+
         return r
 
     def _reward_lane_boundary(self, agent, bgVehicle) -> (float, bool):
-        """8.4 偏离路径惩罚 (含截断)"""
+        """路径约束 (归一化)"""
         laneResult = LaneProjector.fromTessngVehicle(bgVehicle, p2m)
         if not laneResult:
-            return -50.0, True
+            return -1.0, True
 
         offsetAbs = abs(laneResult.lateral_offset)
         if offsetAbs > 2.5:
-            return -50.0, True
+            return -1.0, True
 
-        return (-offsetAbs * 0.5) if offsetAbs > 0.5 else 0.0, False
+        return (-offsetAbs * 0.05) if offsetAbs > 0.5 else 0.0, False
 
     def _reward_direction(self, agent, s) -> (float, bool):
-        """8.5 逆行惩罚 (含截断)"""
+        """逆行约束 (归一化)"""
         _, _, expectedHeading = self._posOnPath(agent["smoothed"], agent["progress"])
         path_heading_err = abs(s["actual_heading"] - expectedHeading)
-        if path_heading_err > 180:
-            path_heading_err = 360 - path_heading_err
+        if path_heading_err > 180: path_heading_err = 360 - path_heading_err
 
         if path_heading_err > 90.0:
-            return -50.0, True
+            return -1.0, True
         elif path_heading_err > 45.0:
-            return -(path_heading_err - 45.0) / 45.0 * 2.0, False
+            return -(path_heading_err - 45.0) / 45.0 * 0.2, False
         return 0.0, False
 
     def _reward_static_penalties(self, s) -> float:
-        """8.1 停车惩罚 + 8.2 远离惩罚"""
+        """
+        静态与远离惩罚 (归一化): 
+        防止背景车在离主车较远时停止参与博弈，或无意义地远离主车。
+        """
         r = 0.0
-        if s["ego_speed"] < 0.5 and s["distToEgo"] > 10.0:  # 修正为 agent speed 原逻辑
-            pass  # 这里引用 s['actual_speed'] 更好，原代码用的是 agent["speed"]
-        # 保持原逻辑引用：
-        # (由于函数作用域限制，如果需要使用 agent['speed']，可在 computeReward 传入)
-        return r  # 此处逻辑可根据需要微调
+        # 1. 停车惩罚：离主车 10m 开外且处于静止状态
+        if s["agent_speed"] < 0.5 and s["distToEgo"] > 10.0:
+            r -= 0.05
+            
+        # 2. 远离主车惩罚 (如果距离超过 30m)
+        if s["distToEgo"] > 30.0:
+            r -= 0.02  # 距离过远基础惩罚
+            
+            # 动态检查：如果速度差导致距离进一步拉大
+            if s["speedDiff"] > 0 and s["forwardDist"] > 0:
+                # 背景车在前面且跑得更快 -> 越拉越远
+                r -= 0.05
+            elif s["speedDiff"] < 0 and s["forwardDist"] < 0:
+                # 背景车在后面且跑得更慢 -> 越掉越远
+                r -= 0.05
+        return r
 
     # ============================================================
     #  终止判断
