@@ -18,6 +18,7 @@ import numpy as np
 import gym
 from gym import spaces
 from typing import Optional, Dict, Any, Tuple
+from Utils.Constant import MAX_ACCEL,MAX_STEER_ANGLE
 
 
 OBS_DIM = 94
@@ -28,7 +29,7 @@ class TessngDrivingEnvPPO(gym.Env):
     Gymnasium 环境封装（连续动作，适配 PPO）
 
     observation_space: Box(0, 1, shape=(obs_dim,))
-    action_space: Box(low=[-5.0, -0.7], high=[5.0, 0.7], shape=(2,))
+    action_space: Box(low=[-MAX_ACCEL, -MAX_STEER_ANGLE], high=[MAX_ACCEL, MAX_STEER_ANGLE], shape=(2,))
     """
 
     metadata = {"render_modes": ["human"]}
@@ -41,13 +42,19 @@ class TessngDrivingEnvPPO(gym.Env):
         )
         
         # 动作空间：连续 [accel, steer]
-        # 加速度: [-5.0, 5.0] m/s^2
-        # 转向角: [-0.7, 0.7] rad (这里与 MySimulator 中的最大转向角对应)
+        
         self.action_space = spaces.Box(
-            low=np.array([-7.0, -0.7]), 
-            high=np.array([7.0, 0.7]), 
+            low=np.array([-1.0, -1.0]),
+            high=np.array([1.0, 1.0]),
             dtype=np.float32
         )
+
+        # ===== 动作平滑参数 =====
+        self._prev_control = np.array([0.0, 0.0], dtype=np.float32)
+
+        # 控制变化率限制（非常关键）
+        self._max_accel_delta = 1.0     # m/s² per step
+        self._max_steer_delta = 0.08    # rad per step
 
         # ===== 线程同步 =====
         self._actionReady = threading.Event()
@@ -86,13 +93,36 @@ class TessngDrivingEnvPPO(gym.Env):
         if self._closed:
             raise RuntimeError("环境已关闭")
 
-        # 确保动作在定义范围内
-        clipped_action = np.clip(action, self.action_space.low, self.action_space.high)
-        self._action = clipped_action
-        
-        # 转换为 Python float tuple 以供控制使用
-        self._control = (float(clipped_action[0]), float(clipped_action[1]))
+        # ========= 1 raw action =========
+        raw_action = np.clip(action, -1.0, 1.0)
 
+        # ========= 2 tanh squash =========
+        # 关键：防止边界卡死,tanh 起到平滑作用，不会卡在边界
+        accel = MAX_ACCEL * np.tanh(raw_action[0])
+        steer = MAX_STEER_ANGLE * np.tanh(raw_action[1])
+
+        # ========= 3 动作平滑（防 collapse）=========
+        prev_accel, prev_steer = self._prev_control
+
+        accel = np.clip(
+            accel,
+            prev_accel - self._max_accel_delta,
+            prev_accel + self._max_accel_delta,
+        )
+
+        steer = np.clip(
+            steer,
+            prev_steer - self._max_steer_delta,
+            prev_steer + self._max_steer_delta,
+        )
+
+        # ========= 4 保存 =========
+        self._prev_control = np.array([accel, steer], dtype=np.float32)
+
+        self._control = (float(accel), float(steer))
+        self._action = raw_action
+
+        # ========= 5 同步 =========
         self._obsReady.clear()
         self._actionReady.set()
 
@@ -120,6 +150,9 @@ class TessngDrivingEnvPPO(gym.Env):
 
         self._done = False
         self._truncated = False
+        
+        # 重置动作历史（防继承极端策略）
+        self._prev_control[:] = 0.0
 
         return self._obs.copy()
 
