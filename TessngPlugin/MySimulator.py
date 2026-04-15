@@ -670,6 +670,8 @@ class MySimulator(QObject, PyCustomerSimulator):
             (p2m(actual_x) - p2m(ego.x)) ** 2 + (p2m(actual_y) - p2m(ego.y)) ** 2
         )
 
+        real_x, real_y, expected_heading = self._posOnPath(agent["smoothed"], agent["progress"])
+
         return {
             "ego_x": ego.x,
             "ego_y": ego.y,
@@ -685,6 +687,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             "dx": dx,
             "dy": dy,
             "agent_speed": agent["speed"],
+            "real_x": real_x,
+            "real_y": real_y,
+            "expected_heading": expected_heading
         }
 
     def _r_survival(self, s):
@@ -716,11 +721,20 @@ class MySimulator(QObject, PyCustomerSimulator):
         return 0
     
     def _r_progress(self, s):
-        speed = s["agent_speed"]
-        # 基础速度奖励：鼓励保持在 5m/s ~ 15m/s 左右
-        if speed > 1.0:
-            return 0.05 * speed  # 速度越快奖励越高，抵消转向惩罚
-        return -0.2  # 极低速直接给负分
+        # 计算实际速度在期望方向上的投影
+        # 如果转圈时车头反了，投影就是负的，不仅不给奖还要扣分
+        expected_heading = s["expected_heading"]
+        actual_heading = s["actual_heading"]
+        
+        diff_rad = math.radians(actual_heading - expected_heading)
+        # 投影速度 = 速率 * cos(角度差)
+        projected_speed = s["agent_speed"] * math.cos(diff_rad)
+        
+        if projected_speed > 0.5:
+            return 0.1 * projected_speed
+        else:
+            # 如果投影速度是负值（逆行或横着滑），给予严厉惩罚
+            return -0.5
 
     def _r_interaction(self, s):
         r = 0.0
@@ -749,11 +763,11 @@ class MySimulator(QObject, PyCustomerSimulator):
         r = 0.0
 
         # 转向惩罚（降低权重）
-        r -= abs(steer) * 0.2
+        r -= abs(steer) * 0.8
 
-        # 抖动惩罚
+        # 抖动惩罚, 防止“画龙”和剧烈摆动
         prev = agent.get("prev_steer", 0.0)
-        r -= abs(steer - prev) * 0.2
+        r -= abs(steer - prev) * 1.5 # 增加突变惩罚
         agent["prev_steer"] = steer
 
         return r
@@ -795,8 +809,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         """
 
         # === 1. 获取路径期望方向 ===
-        _, _, expected_heading = self._posOnPath(agent["smoothed"], agent["progress"])
-
+        expected_heading = s["expected_heading"]
         actual_heading = s["actual_heading"]
 
         # === 2. 计算角度差（0~180）===
@@ -805,27 +818,27 @@ class MySimulator(QObject, PyCustomerSimulator):
             diff = 360 - diff
 
         # === 3. 连续惩罚（核心）===
-        # 0~30°：基本合理
-        if diff < 30:
+        # 0~5°：基本合理
+        if diff < 5:    
             penalty = 0.0
 
-        # 30~90°：逐渐惩罚（线性）
-        elif diff < 90:
-            penalty = -(diff - 30) / 60.0 * 0.5  # 最大 -0.5
+        # 5~45°：逐渐惩罚（线性）
+        elif diff < 45:
+            penalty = -(diff - 5) / 40.0 * 0.5  # 最大 -0.5
 
-        # >90°：严重错误（快速拉满惩罚）
+        # >45°：严重错误（快速拉满惩罚）
         else:
-            penalty = -0.5 - (diff - 90) / 90.0 * 0.5  # 到 -1.0
+            penalty = -1.0
 
         # === 4. 判定“逆行终止”===
         # 条件：角度大 + 持续时间
-        if diff > 120:
+        if diff > 60:
             agent["_wrong_dir_count"] = agent.get("_wrong_dir_count", 0) + 1
         else:
             agent["_wrong_dir_count"] = 0
 
         # 连续 5 帧严重偏离 → 判定失败
-        if agent["_wrong_dir_count"] > 5:
+        if agent["_wrong_dir_count"] > 10:
             return -3.0, True
 
         return penalty, False
