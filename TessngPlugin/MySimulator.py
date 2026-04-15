@@ -194,7 +194,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 找主车和所有背景车
         egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
-        
+
         # 找到指定的“主攻手”作为观测基准
         bgVehicle = None
         for v in bgVehicles:
@@ -202,7 +202,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             if avName == getattr(self, "_attacker_name", None):
                 bgVehicle = v
                 break
-                
+
         if bgVehicle is None:
             return
 
@@ -280,7 +280,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             print("[推理] 所有背景车到达终点，重置")
             self.multiInfer.resetAll()
             self._inferCreated = False
-            
+
             # [修复] 在推理模式下重置时，也要重置主车(Ego)的状态
             if hasattr(self, "playerManager"):
                 self.playerManager.load_all()
@@ -320,7 +320,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     gamma=0.99,
                     gae_lambda=0.95,
                     clip_range=0.2,
-                    ent_coef=0.0,
+                    ent_coef=0.01,
                     verbose=1,
                     tensorboard_log=TENSORBOARD_LOG
                 )
@@ -356,7 +356,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         else:
             print("[训练] Data 目录无 JSON 文件")
             return
-        
+
         # 切换到推理模式前，关闭 env 解除可能的阻塞
         self.env.close()
 
@@ -400,10 +400,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         for name, info in self.currentVehicles.items():
             smoothed = MultiVehicleInference._smoothPath(info["path"], 1.0)
             totalLen = MultiVehicleInference._pathLength(smoothed)
-            
+
             # 初始化起点坐标
             init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
-            
+
             self.bgAgents[name] = {
                 "speed": info["speed"],
                 "progress": 0.0,
@@ -436,9 +436,9 @@ class MySimulator(QObject, PyCustomerSimulator):
     def applyBgActions(self, control):
         """所有背景车根据角色(主攻手/NPC)执行动作推进"""
         accel, steer = control
-        
+
         # 调试输出当前动作，监控 PPO 输出的加速度和方向盘转角
-        if getattr(self, "_attacker_name", None):
+        if getattr(self, "_attacker_name", None) and np.random.rand() < 0.01:
             print(f"[Action] {self._attacker_name} -> accel: {accel:.2f}, steer: {steer:.2f}")
 
         vsMap = {}
@@ -446,25 +446,25 @@ class MySimulator(QObject, PyCustomerSimulator):
             s = agent["smoothed"]
             if len(s) < 2:
                 continue
-                
+
             if name == getattr(self, "_attacker_name", None):
                 # ===== 主攻手：由强化学习完全接管 =====
                 agent["speed"] += accel * self.dt
                 agent["speed"] = max(0.0, min(agent["speed"], MAX_SPEED))
-                
+
                 # 引入车辆运动学模型 (Kinematic Bicycle Model，自动驾驶中用于模拟四轮小汽车的经典单辙模型)
                 # 假设小汽车轴距为 2.8 米
                 wheelbase = getattr(self, "WHEEL_BASE", 2.8)
                 yaw_rate = (agent["speed"] * math.tan(steer)) / wheelbase
-                
+
                 agent["prevHeading"] = agent.get("heading", agent["prevHeading"])
                 agent["heading"] = (agent["prevHeading"] + math.degrees(yaw_rate * self.dt)) % 360.0
-                
+
                 heading_rad = math.radians(agent["heading"])
                 # Tessng GUI坐标：dx = sin(heading), dy = cos(heading)
                 agent["x"] += agent["speed"] * math.sin(heading_rad) * self.dt
                 agent["y"] += agent["speed"] * math.cos(heading_rad) * self.dt
-                
+
                 agent["progress"] += agent["speed"] * self.dt
                 agent["progress"] = min(agent["progress"], agent["totalLength"])
             else:
@@ -493,7 +493,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             info = self.currentVehicles.get(name, {})
             agent["speed"] = info.get("speed", 10.0)
             agent["progress"] = 0.0
-            
+
             # 重新获取起点坐标和航向
             smoothed = agent["smoothed"]
             init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
@@ -503,7 +503,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 init_heading = math.degrees(math.atan2(dx, dy)) % 360.0
             else:
                 init_heading = 0.0
-                
+
             agent["prevHeading"] = init_heading
             agent["heading"] = init_heading
             agent["x"] = init_x
@@ -596,9 +596,6 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def computeReward(self, bgVehicle) -> float:
-        """
-        归一化后的奖励函数：目标区间控制在 [-1, 1] 左右
-        """
         attacker_name = getattr(self, "_attacker_name", None)
         if (
             not self.bgAgents
@@ -607,51 +604,55 @@ class MySimulator(QObject, PyCustomerSimulator):
         ):
             return 0.0
 
-        # 1. 基础初始化
         agent = self.bgAgents[attacker_name]
+        s = self._prepare_state_info(agent)
+
         self._is_collision = False
         self._is_out_of_bounds = False
         self._is_wrong_way = False
 
-        # 2. 预计算物理状态
-        s = self._prepare_state_info(agent)
+        reward = 0.0
 
-        # 3. 基础与进度奖励 (归一化：max ~ 0.05)
-        reward = self._reward_basic_and_progress(agent)
+        # 1 生存奖励（核心反自杀）
+        reward += 0.02  # 每步固定收益（非常关键）
 
-        # 4. 碰撞判定 (核心成功条件：截断至 +1.0)
-        is_collide = self._check_bbox_collision(
-            s["actual_x"], s["actual_y"], s["actual_heading"], 4.8, 2.0,
-            s["ego_x"], s["ego_y"], s["ego_heading"], 4.8, 2.0,
-        )
-        if is_collide:
-            self._is_collision = True
-            return 1.0 
+        # 2 距离控制（核心驱动力）
+        reward += self._r_distance(s)
 
-        # 5. 交互奖励 (归一化：max ~ 0.3)
-        reward += self._reward_interaction(agent, s)
+        # 3 对抗行为（真正学习目标）
+        reward += self._r_interaction(s)
 
-        # 6. 控制平滑奖励 (包含非线性转向惩罚，防止转圈)
-        reward += self._reward_control_smoothness(agent)
+        # 4 行为约束（防发疯）
+        reward += self._r_action(agent)
 
-        # 7. 越界检测 (截断至 -1.0)
-        lane_penalty, out_of_bounds = self._reward_lane_boundary(agent, bgVehicle)
+        # 5 车道约束（渐进惩罚）
+        lane_penalty, out = self._r_lane(bgVehicle)
         reward += lane_penalty
-        if out_of_bounds:
+        if out:
+            reward -= 0.5  # 每步持续惩罚
             self._is_out_of_bounds = True
-            return -1.0 
+            # return -3.0   # 强惩罚
 
-        # 8. 逆行检测 (截断至 -1.0)
-        wrong_way_penalty, is_wrong = self._reward_direction(agent, s)
-        reward += wrong_way_penalty
-        if is_wrong:
+        # 6 方向约束
+        dir_penalty, wrong = self._r_direction(agent, s)
+        reward += dir_penalty
+        if wrong:
             self._is_wrong_way = True
-            return -1.0
+            reward -= 0.5  # 每步持续惩罚
+            # return -3.0
 
-        # 9. 状态惩罚
-        reward += self._reward_static_penalties(s)
+        # 7 碰撞（唯一成功）
+        if self._check_collision(s):
+            self._is_collision = True
+            return +2.0
 
-        return float(np.clip(reward, -1.0, 1.0))
+        # 8 提前结束惩罚（关键）
+        if self.stepCount < 30:
+            reward -= 0.05 * (30 - self.stepCount)
+
+        reward *= min(1.0, self.stepCount / 50.0)
+
+        return float(np.clip(reward, -3.0, 2.0))
 
     # --- 逻辑拆解子函数 ---
 
@@ -682,123 +683,129 @@ class MySimulator(QObject, PyCustomerSimulator):
             "speedDiff": agent["speed"] - ego.speed,
             "dx": dx,
             "dy": dy,
-            "agent_speed":agent["speed"]
+            "agent_speed": agent["speed"],
         }
 
-    def _reward_basic_and_progress(self, agent) -> float:
-        """基础活跃奖励与进度奖励"""
-        r = 0.005 
-        progressThisStep = agent["speed"] * self.dt
-        r += min(progressThisStep / 20.0, 0.04) 
+    def _r_distance(self, s):
+        d = s["distToEgo"]
+
+        # 理想距离：5~15m
+        if d < 5:
+            return -0.1 * (5 - d)  # 太近反而惩罚（避免无脑撞）
+        elif d < 15:
+            return +0.1 * (1 - abs(d - 10) / 10)
+        elif d < 30:
+            return +0.02 * (1 - (d - 15) / 15)
+        else:
+            return -0.05
+
+    def _r_interaction(self, s):
+        r = 0.0
+
+        forward = s["forwardDist"]
+        lateral = abs(s["lateralDist"])
+        dv = s["speedDiff"]
+
+        # ===== 卡位（最重要）=====
+        if 0 < forward < 10 and lateral < 2.0:
+            r += 0.2  # 强奖励
+
+        # ===== 追击 =====
+        if forward < 0 and dv > 0:
+            r += 0.05
+
+        # ===== 阻挡 =====
+        if forward > 0 and dv < 0:
+            r += 0.05
+
         return r
 
-    def _reward_interaction(self, agent, s) -> float:
-        """交互引导奖励 (归一化)"""
-        r = 0.0
-        dist = s["distToEgo"]
-
-        # 距离诱导
-        if dist < 10.0:
-            r += 0.1 * (1.0 - dist / 10.0)
-        elif dist < 25.0:
-            r += 0.03 * (1.0 - dist / 25.0)
-
-        # 速度与位置配合
-        if s["forwardDist"] < 0:  
-            r += (min(s["speedDiff"] / 100.0, 0.02) if s["speedDiff"] > 0 
-                  else -min(abs(s["speedDiff"]) / 50.0, 0.05))
-        else: 
-            r += (min(abs(s["speedDiff"]) / 100.0, 0.03) if s["speedDiff"] < 0 
-                  else -min(s["speedDiff"] / 50.0, 0.05))
-
-        # 卡位与挤压
-        if 0 < s["forwardDist"] < 15.0 and abs(s["lateralDist"]) < 2.0:
-            r += 0.05 + (0.05 if s["ego_speed"] > agent["speed"] + 1.0 else 0)
-        
-        # 追踪瞄准
-        dx_ego, dy_ego = s["ego_x"] - s["actual_x"], s["ego_y"] - s["actual_y"]
-        angle_to_ego = math.degrees(math.atan2(dx_ego, dy_ego)) % 360.0
-        h_err = abs(s["actual_heading"] - angle_to_ego)
-        if h_err > 180: h_err = 360 - h_err
-
-        attHeadingRad = math.radians(90.0 - s["actual_heading"])
-        att_forwardDist = dx_ego * math.cos(attHeadingRad) + dy_ego * math.sin(attHeadingRad)
-        if dist < 30.0 and att_forwardDist > 0:
-            r += (1.0 - h_err / 45.0) * 0.05
-        return r
-
-    def _reward_control_smoothness(self, agent) -> float:
-        """
-        控制平滑与转向约束：
-        通过平方惩罚 (steer**2) 解决持续满打方向盘转圈的问题。
-        """
-        r = 0.0
+    def _r_action(self, agent):
         accel, steer = self.currentControl
-        
-        # 1. 绝对转向惩罚：使用平方项，让大转角（如0.7）的惩罚远高于小转角
-        r -= (steer ** 2) * 0.2
-        
-        # 2. 转向变化率惩罚：防止高频抖动 (steer_diff)
-        prev_steer = agent.get("prev_steer", 0.0)
-        steer_diff = abs(steer - prev_steer)
-        if steer_diff > 0.02:
-            r -= steer_diff * 0.5
+
+        r = 0.0
+
+        # 转向惩罚（降低权重）
+        r -= abs(steer) * 0.2
+
+        # 抖动惩罚
+        prev = agent.get("prev_steer", 0.0)
+        r -= abs(steer - prev) * 0.2
         agent["prev_steer"] = steer
 
-        # 3. 航向变化惩罚 (画龙)
-        hDiff = abs(agent.get("heading", 0) - agent.get("prevHeading", 0))
-        if hDiff > 180: hDiff = 360 - hDiff
-        if hDiff > 3.0:
-            r -= min(hDiff / 50.0, 0.1)
-
         return r
 
-    def _reward_lane_boundary(self, agent, bgVehicle) -> (float, bool):
-        """路径约束 (归一化)"""
-        laneResult = LaneProjector.fromTessngVehicle(bgVehicle, p2m)
-        if not laneResult:
-            return -1.0, True
+    def _r_lane(self, bgVehicle):
+        lane = LaneProjector.fromTessngVehicle(bgVehicle, p2m)
+        if not lane:
+            return -3.0, True
 
-        offsetAbs = abs(laneResult.lateral_offset)
-        if offsetAbs > 2.5:
-            return -1.0, True
+        offset = abs(lane.lateral_offset)
 
-        return (-offsetAbs * 0.05) if offsetAbs > 0.5 else 0.0, False
+        # 渐进惩罚（非常关键）
+        if offset > 2.5:
+            return -3.0, True
+        elif offset > 1.0:
+            return -(offset - 1.0) * 0.5, False
+        else:
+            return 0.0, False
 
-    def _reward_direction(self, agent, s) -> (float, bool):
-        """逆行约束 (归一化)"""
-        _, _, expectedHeading = self._posOnPath(agent["smoothed"], agent["progress"])
-        path_heading_err = abs(s["actual_heading"] - expectedHeading)
-        if path_heading_err > 180: path_heading_err = 360 - path_heading_err
+    def _check_collision(self, s):
+        return self._check_bbox_collision(
+            s["actual_x"],
+            s["actual_y"],
+            s["actual_heading"],
+            4.8,
+            2.0,
+            s["ego_x"],
+            s["ego_y"],
+            s["ego_heading"],
+            4.8,
+            2.0,
+        )
 
-        if path_heading_err > 90.0:
-            return -1.0, True
-        elif path_heading_err > 45.0:
-            return -(path_heading_err - 45.0) / 45.0 * 0.2, False
-        return 0.0, False
-
-    def _reward_static_penalties(self, s) -> float:
+    def _r_direction(self, agent, s):
         """
-        静态与远离惩罚 (归一化): 
-        防止背景车在离主车较远时停止参与博弈，或无意义地远离主车。
+        航向约束：
+        - 防止逆行 / 掉头
+        - 提供连续惩罚（而不是突然 -1）
         """
-        r = 0.0
-        # 1. 停车惩罚：离主车 10m 开外且处于静止状态
-        if s["agent_speed"] < 0.5 and s["distToEgo"] > 10.0:
-            r -= 0.05
-            
-        # 2. 远离主车惩罚 (如果距离超过 30m)
-        if s["distToEgo"] > 30.0:
-            r -= 0.02  # 距离过远基础惩罚
-            
-            # 动态检查：如果速度差导致距离进一步拉大
-            if s["speedDiff"] > 0 and s["forwardDist"] > 0:
-                # 背景车在前面且跑得更快 -> 越拉越远
-                r -= 0.05
-            elif s["speedDiff"] < 0 and s["forwardDist"] < 0:
-                # 背景车在后面且跑得更慢 -> 越掉越远
-                r -= 0.05
-        return r
+
+        # === 1. 获取路径期望方向 ===
+        _, _, expected_heading = self._posOnPath(agent["smoothed"], agent["progress"])
+
+        actual_heading = s["actual_heading"]
+
+        # === 2. 计算角度差（0~180）===
+        diff = abs(actual_heading - expected_heading)
+        if diff > 180:
+            diff = 360 - diff
+
+        # === 3. 连续惩罚（核心）===
+        # 0~30°：基本合理
+        if diff < 30:
+            penalty = 0.0
+
+        # 30~90°：逐渐惩罚（线性）
+        elif diff < 90:
+            penalty = -(diff - 30) / 60.0 * 0.5  # 最大 -0.5
+
+        # >90°：严重错误（快速拉满惩罚）
+        else:
+            penalty = -0.5 - (diff - 90) / 90.0 * 0.5  # 到 -1.0
+
+        # === 4. 判定“逆行终止”===
+        # 条件：角度大 + 持续时间
+        if diff > 120:
+            agent["_wrong_dir_count"] = agent.get("_wrong_dir_count", 0) + 1
+        else:
+            agent["_wrong_dir_count"] = 0
+
+        # 连续 5 帧严重偏离 → 判定失败
+        if agent["_wrong_dir_count"] > 5:
+            return -3.0, True
+
+        return penalty, False
 
     # ============================================================
     #  终止判断
@@ -809,16 +816,16 @@ class MySimulator(QObject, PyCustomerSimulator):
         if getattr(self, "_is_collision", False):
             print("[Done] 主攻手发生碰撞! 干扰任务圆满完成。")
             return True
-            
-        # 1.5 严重偏离车道，干扰失败
-        if getattr(self, "_is_out_of_bounds", False):
-            print("[Done] 主攻手严重偏离车道! 干扰失败。")
-            return True
 
-        # 1.6 逆行或掉头，干扰失败
-        if getattr(self, "_is_wrong_way", False):
-            print("[Done] 主攻手逆行或掉头! 干扰失败。")
-            return True
+        # 1.5 严重偏离车道，干扰失败（换成持续惩罚，避免自杀式逃避惩罚）
+        # if getattr(self, "_is_out_of_bounds", False):
+        #     print("[Done] 主攻手严重偏离车道! 干扰失败。")
+        #     return True
+
+        # 1.6 逆行或掉头，干扰失败（换成持续惩罚，避免自杀式逃避惩罚）
+        # if getattr(self, "_is_wrong_way", False):
+        #     print("[Done] 主攻手逆行或掉头! 干扰失败。")
+        #     return True
 
         # 2. 达到最大步数
         if self.stepCount >= 500:
@@ -869,18 +876,18 @@ class MySimulator(QObject, PyCustomerSimulator):
             sin_h = math.sin(rad)
             hl = length / 2.0
             hw = width / 2.0
-            
+
             # 车头方向为X轴，车身宽为Y轴
             dx1, dy1 = hl * cos_h, hl * sin_h
             dx2, dy2 = -hw * sin_h, hw * cos_h
-            
+
             return [
                 (cx + dx1 + dx2, cy + dy1 + dy2),
                 (cx + dx1 - dx2, cy + dy1 - dy2),
                 (cx - dx1 - dx2, cy - dy1 - dy2),
                 (cx - dx1 + dx2, cy - dy1 + dy2)
             ]
-            
+
         def get_axes(corners):
             axes = []
             for i in range(2): # 矩形只需要相邻两条边的法向量
@@ -892,12 +899,12 @@ class MySimulator(QObject, PyCustomerSimulator):
                 if length_edge > 1e-6:
                     axes.append((-dy / length_edge, dx / length_edge))
             return axes
-            
+
         corners1 = get_corners(x1, y1, heading1, l1, w1)
         corners2 = get_corners(x2, y2, heading2, l2, w2)
-        
+
         axes = get_axes(corners1) + get_axes(corners2)
-        
+
         for axis in axes:
             min1, max1 = float('inf'), float('-inf')
             for p in corners1:
@@ -944,59 +951,4 @@ class MySimulator(QObject, PyCustomerSimulator):
         dy = by - ay
         heading = math.degrees(math.atan2(dx, dy)) % 360.0
         return bx, by, heading
-    
-    @staticmethod
-    def _check_bbox_collision(x1, y1, heading1, l1, w1, x2, y2, heading2, l2, w2):
-        """使用分离轴定理(SAT)检测两个OBB(带有朝向的矩形)是否发生碰撞"""
-        def get_corners(cx, cy, heading, length, width):
-            # 将 heading 转换为数学弧度 (90 - heading)
-            rad = math.radians(90.0 - heading)
-            cos_h = math.cos(rad)
-            sin_h = math.sin(rad)
-            hl = length / 2.0
-            hw = width / 2.0
-            
-            # 车头方向为X轴，车身宽为Y轴
-            dx1, dy1 = hl * cos_h, hl * sin_h
-            dx2, dy2 = -hw * sin_h, hw * cos_h
-            
-            return [
-                (cx + dx1 + dx2, cy + dy1 + dy2),
-                (cx + dx1 - dx2, cy + dy1 - dy2),
-                (cx - dx1 - dx2, cy - dy1 - dy2),
-                (cx - dx1 + dx2, cy - dy1 + dy2)
-            ]
-            
-        def get_axes(corners):
-            axes = []
-            for i in range(2): # 矩形只需要相邻两条边的法向量
-                p1 = corners[i]
-                p2 = corners[(i + 1) % 4]
-                dx = p2[0] - p1[0]
-                dy = p2[1] - p1[1]
-                length_edge = math.hypot(dx, dy)
-                if length_edge > 1e-6:
-                    axes.append((-dy / length_edge, dx / length_edge))
-            return axes
-            
-        corners1 = get_corners(x1, y1, heading1, l1, w1)
-        corners2 = get_corners(x2, y2, heading2, l2, w2)
-        # print(f"bbox: {corners1} vs {corners2}")
-        
-        axes = get_axes(corners1) + get_axes(corners2)
-        
-        for axis in axes:
-            min1, max1 = float('inf'), float('-inf')
-            for p in corners1:
-                proj = p[0] * axis[0] + p[1] * axis[1]
-                min1, max1 = min(min1, proj), max(max1, proj)
-                
-            min2, max2 = float('inf'), float('-inf')
-            for p in corners2:
-                proj = p[0] * axis[0] + p[1] * axis[1]
-                min2, max2 = min(min2, proj), max(max2, proj)
-                
-            if max1 < min2 or max2 < min1:
-                return False # 找到分离轴，没有碰撞
-                
-        return True # 所有轴都有重叠，发生碰撞
+
