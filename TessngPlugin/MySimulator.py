@@ -612,19 +612,22 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         reward = 0.0
 
-        # 1 生存奖励（核心反自杀）
-        reward += 0.02  # 每步固定收益（非常关键）
+        # 生存奖励（核心反自杀）
+        reward += self._r_survival(s)
 
-        # 2 距离控制（核心驱动力）
+        # 距离控制（核心驱动力）
         reward += self._r_distance(s)
 
-        # 3 对抗行为（真正学习目标）
+        # 对抗行为（真正学习目标）
         reward += self._r_interaction(s)
 
-        # 4 行为约束（防发疯）
+        # 行为约束（防发疯）
         reward += self._r_action(agent)
 
-        # 5 车道约束（渐进惩罚）
+        # 速度进度奖励（新增：核心驱动力）
+        reward += self._r_progress(s)
+
+        # 车道约束（渐进惩罚）
         lane_penalty, out = self._r_lane(bgVehicle)
         reward += lane_penalty
         if out:
@@ -632,7 +635,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._is_out_of_bounds = True
             # return -3.0   # 强惩罚
 
-        # 6 方向约束
+        # 方向约束
         dir_penalty, wrong = self._r_direction(agent, s)
         reward += dir_penalty
         if wrong:
@@ -652,11 +655,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         if self.stepCount < 30:
             reward -= 0.05 * (30 - self.stepCount)
 
-        reward *= min(1.0, self.stepCount / 50.0)
-
         return float(np.clip(reward, -3.0, 2.0))
-
-    # --- 逻辑拆解子函数 ---
 
     def _prepare_state_info(self, agent):
         """计算相对位置、投影距离等物理量"""
@@ -688,6 +687,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             "agent_speed": agent["speed"],
         }
 
+    def _r_survival(self, s):
+        return 0.05 if s["agent_speed"] > 0.5 else 0.0
+
     def _r_distance(self, s):
         d = s["distToEgo"]
 
@@ -705,13 +707,20 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 7.5 卡死连续惩罚（不终止，只扣分）
         if agent["speed"] < 0.1:
             agent["_stuck_count_reward"] = agent.get("_stuck_count_reward", 0) + 1
-            if agent["_stuck_count_reward"] > 15:
-                # 超过 15 帧静止，每帧给较强的负反馈，逼迫它动起来
-                return -0.05
+            if agent["_stuck_count_reward"] > 10:
+                # 超过 10 帧静止，每帧给较强的负反馈，逼迫它动起来
+                return -0.1 * min(10.0, (agent["_stuck_count_reward"] - 10) / 5.0)
         else:
             agent["_stuck_count_reward"] = 0
         
         return 0
+    
+    def _r_progress(self, s):
+        speed = s["agent_speed"]
+        # 基础速度奖励：鼓励保持在 5m/s ~ 15m/s 左右
+        if speed > 1.0:
+            return 0.05 * speed  # 速度越快奖励越高，抵消转向惩罚
+        return -0.2  # 极低速直接给负分
 
     def _r_interaction(self, s):
         r = 0.0
