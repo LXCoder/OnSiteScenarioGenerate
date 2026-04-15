@@ -643,7 +643,10 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._is_collision = True
             return +2.0
 
-        # 8 提前结束惩罚（关键）
+        # 8 卡死连续惩罚
+        reward += self._r_stop(agent)
+
+        # 9 提前结束惩罚（关键）
         if self.stepCount < 30:
             reward -= 0.05 * (30 - self.stepCount)
 
@@ -695,6 +698,18 @@ class MySimulator(QObject, PyCustomerSimulator):
             return +0.02 * (1 - (d - 15) / 15)
         else:
             return -0.05
+        
+    def _r_stop(self,agent):
+        # 7.5 卡死连续惩罚（不终止，只扣分）
+        if agent["speed"] < 0.1:
+            agent["_stuck_count_reward"] = agent.get("_stuck_count_reward", 0) + 1
+            if agent["_stuck_count_reward"] > 15:
+                # 超过 15 帧静止，每帧给较强的负反馈，逼迫它动起来
+                return -0.05
+        else:
+            agent["_stuck_count_reward"] = 0
+        
+        return 0
 
     def _r_interaction(self, s):
         r = 0.0
@@ -835,14 +850,14 @@ class MySimulator(QObject, PyCustomerSimulator):
             if agent["progress"] >= agent["totalLength"]:
                 print("[Done] 主攻手到达终点。")
                 return True
-
-            if agent["speed"] < 0.1:
-                agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
-                if agent["_stuck_count"] > 15:
-                    print("[Done] 探测到主攻手卡死，重置。")
-                    return True
-            else:
-                agent["_stuck_count"] = 0
+            
+            # if agent["speed"] < 0.1:
+            #     agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
+            #     if agent["_stuck_count"] > 15:
+            #         print("[Done] 探测到主攻手卡死，重置。")
+            #         return True
+            # else:
+            #     agent["_stuck_count"] = 0
 
         return False
 
