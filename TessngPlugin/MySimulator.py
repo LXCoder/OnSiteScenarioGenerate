@@ -35,24 +35,21 @@ from Utils.NavigationCalculator import NavigationCalculator
 from Utils.SurroundingCalculator import SurroundingCalculator
 from Utils.YawRateCalculator import YawRateCalculator
 from ScenarioLoader import ScenarioLoader
-from MultiVehicleInference import MultiVehicleInference,WHEEL_BASE
-
-# 归一化常量
-MAX_LANE_WIDTH = 4.0
-MAX_SPEED = 33.3
-MAX_STEER_ANGLE = 0.7
-MAX_ACCEL = 7.0
-MAX_DECEL = -7.0
-
-# ===== 配置 =====
-TRAIN_MODE = True
-TOTAL_TIMESTEPS = 500000
-DATA_DIR = "Data"
-
-# 选择强化学习算法: "DQN" 或 "PPO"
-RL_ALGO = "PPO"
-MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
-TENSORBOARD_LOG = "./tensorboard_logs/"
+from MultiVehicleInference import MultiVehicleInference
+from Utils.Constant import (
+    WHEEL_BASE,
+    MAX_LANE_WIDTH,
+    MAX_SPEED,
+    MAX_STEER_ANGLE,
+    MAX_ACCEL,
+    MAX_DECEL,
+    TRAIN_MODE,
+    TOTAL_TIMESTEPS,
+    DATA_DIR,
+    RL_ALGO,
+    MODEL_SAVE_DIR,
+    TENSORBOARD_LOG,
+)
 
 
 class MySimulator(QObject, PyCustomerSimulator):
@@ -454,7 +451,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
                 # 引入车辆运动学模型 (Kinematic Bicycle Model，自动驾驶中用于模拟四轮小汽车的经典单辙模型)
                 # 假设小汽车轴距为 2.8 米
-                wheelbase = getattr(self, "WHEEL_BASE", 2.8)
+                wheelbase = WHEEL_BASE
                 yaw_rate = (agent["speed"] * math.tan(steer)) / wheelbase
 
                 agent["prevHeading"] = agent.get("heading", agent["prevHeading"])

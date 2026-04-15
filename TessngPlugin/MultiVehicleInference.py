@@ -26,12 +26,8 @@ import math
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
+from Utils.Constant import WHEEL_BASE, MAX_SPEED
 
-
-# 归一化常量
-MAX_SPEED = 33.3
-MAX_ACCEL = 5.0
-MAX_DECEL = -5.0
 
 # 离散动作 (DQN使用)
 ACTION_TO_CONTROL = {
@@ -42,8 +38,7 @@ ACTION_TO_CONTROL = {
     4: (-3.0, 0.0),
 }
 
-# 假设小汽车轴距为 2.8 米
-WHEEL_BASE = 2.8
+
 
 @dataclass
 class VehicleAgent:
