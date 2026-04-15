@@ -49,6 +49,7 @@ from Utils.Constant import (
     RL_ALGO,
     MODEL_SAVE_DIR,
     TENSORBOARD_LOG,
+    TRAIN_MAX_STEPS
 )
 
 
@@ -305,6 +306,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             if RL_ALGO == "PPO":
                 from stable_baselines3 import PPO
+                from datetime import datetime   
 
                 model = PPO(
                     "MlpPolicy",
@@ -319,7 +321,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     clip_range=0.2,
                     ent_coef=0.01,
                     verbose=1,
-                    tensorboard_log=TENSORBOARD_LOG
+                    tensorboard_log=f"{TENSORBOARD_LOG}/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 )
             else:
                 from stable_baselines3 import DQN
@@ -840,7 +842,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         #     return True
 
         # 2. 达到最大步数
-        if self.stepCount >= 500:
+        if self.stepCount >= TRAIN_MAX_STEPS:
             return True
 
         # 3. 检查主攻手状态

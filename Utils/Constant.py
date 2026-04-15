@@ -16,4 +16,5 @@ WHEEL_BASE = 2.8    # 轴距
 # 选择强化学习算法: "DQN" 或 "PPO"
 RL_ALGO = "PPO"
 MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
-TENSORBOARD_LOG = "./tensorboard_logs/"
+TENSORBOARD_LOG = "./Log/"
+TRAIN_MAX_STEPS = 400
