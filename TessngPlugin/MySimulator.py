@@ -200,7 +200,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         """根据 RL 输出的 currentControl (accel, steer) 更新 egoState"""
         if self.egoState is None:
             # 初始状态
-            self.egoState = VehicleState(x=-650.047, y=287.819, heading=140.0, speed=10.0)
+            init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.047, 287.819)
+            _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
+            # 关键修正：VehicleState 的 y 需为数学坐标（即 GUI 坐标取反）
+            self.egoState = VehicleState(x=init_x, y=-init_y, heading=init_heading, speed=10.0)
         
         accel, steer = self.currentControl
         
@@ -214,7 +217,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         
         heading_rad = math.radians(self.egoState.heading)
         self.egoState.x += self.egoState.speed * math.sin(heading_rad) * dt
-        self.egoState.y += self.egoState.speed * math.cos(heading_rad) * dt # 注意：此处 y 是 GUI 坐标系的逻辑
+        # 关键修正：在数学坐标系中，向北(heading=0)为 Y 增加
+        self.egoState.y += self.egoState.speed * math.cos(heading_rad) * dt 
 
         vsMap = {self.egoName: self.egoState}
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
@@ -321,7 +325,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 初始化 Ego 状态
             init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
             _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
-            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=10.0)
+            self.egoState = VehicleState(x=init_x, y=-init_y, heading=init_heading, speed=10.0)
             
             vsMap = {self.egoName: self.egoState}
             # 初始化背景车状态
@@ -329,7 +333,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 agent["progress"] = 0.0
                 x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
                 agent["x"], agent["y"], agent["heading"] = x, y, heading
-                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+                vsMap[name] = VehicleState(x=x, y=-y, heading=heading, speed=agent["speed"])
                 
             self.tessAuto.setAvChannel2AvMsgMap(vsMap)
             self.tessAuto.vehicleCreate()
@@ -392,7 +396,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 agent["y"] = y
                 agent["heading"] = heading
                 
-                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+                vsMap[name] = VehicleState(x=x, y=-y, heading=heading, speed=agent["speed"])
 
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
@@ -1058,8 +1062,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         JSON 坐标约定：x 同 GUI，y = -GUI_y
         Tessng 航向角：正北0°顺时针，基于 GUI 坐标（y 向下）
-        转换：heading = atan2(dx, dy_json)
-          因为 dy_gui = -dy_json，所以 atan2(dx, -dy_gui) = atan2(dx, dy_json)
+        转换：heading = atan2(dx, -dy_gui)
         """
         accumulated = 0.0
         for i in range(len(smoothed) - 1):
@@ -1072,13 +1075,14 @@ class MySimulator(QObject, PyCustomerSimulator):
                 y = ay + ratio * (by - ay)
                 dx = bx - ax
                 dy = by - ay
-                heading = math.degrees(math.atan2(dx, dy)) % 360.0
+                # 关键修正：TNG中 0度是北(-Y)，90度是东(+X)
+                heading = math.degrees(math.atan2(dx, -dy)) % 360.0
                 return x, y, heading
             accumulated += segLen
         bx, by = smoothed[-1]
         ax, ay = smoothed[-2]
         dx = bx - ax
         dy = by - ay
-        heading = math.degrees(math.atan2(dx, dy)) % 360.0
+        heading = math.degrees(math.atan2(dx, -dy)) % 360.0
         return bx, by, heading
 
