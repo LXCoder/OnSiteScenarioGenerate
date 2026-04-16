@@ -242,6 +242,13 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
 
         self.stepCount += 1
+        
+        # 集中计算一次 Frenet 进度，供 Reward 和 Done 共用
+        self._current_s_ego, self._current_s_total, _ = self._getFrenetProgress(
+            self.egoSmoothedPath, 
+            p2m(egoVehicle.pos().x()), 
+            -p2m(egoVehicle.pos().y()) # GUI转数学
+        )
 
         # 构建以 Ego 为中心的观测
         obs = self.buildObs(egoVehicle, vehicles)
@@ -267,7 +274,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         """
         Ego 训练奖励函数（归一化正向奖励机制）：
         单步总奖励严格限制在 [0, 1] 范围内，有助于 PPO 价值网络稳定收敛。
-        权重分配：生存(0.2) + 速度控制(0.3) + 车道居中(0.5)
+        权重分配：生存(0.1) + 速度控制(0.2) + 车道居中(0.4) + 纵向进度(0.3)
         """
         # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
         ego_id = egoVehicle.id()
@@ -278,18 +285,16 @@ class MySimulator(QObject, PyCustomerSimulator):
                     self._is_collision = True
                     return 0.0
 
-        # 2. 基础生存奖励 (权重 0.2)
-        # 只要活着且没有发生碰撞，就给予基础分数
-        r_survival = 0.2
+        # 2. 基础生存奖励 (权重 0.1)
+        r_survival = 0.1
         
-        # 3. 速度奖励 (权重 0.3)
-        # 鼓励接近目标速度 (15m/s)。偏差超过 10m/s 时得分为 0
+        # 3. 速度奖励 (权重 0.2)
         target_v = 15.0
         v = egoVehicle.currSpeed()
         speed_diff = abs(v - target_v)
-        r_speed = 0.3 * max(0.0, (1.0 - speed_diff / 10.0))
+        r_speed = 0.2 * max(0.0, (1.0 - speed_diff / 10.0))
         
-        # 4. 车道居中奖励 (权重 0.5)
+        # 4. 车道居中奖励 (权重 0.4)
         r_center = 0.0
         laneResult = LaneProjector.fromTessngVehicle(egoVehicle, p2m)
         if laneResult:
@@ -300,15 +305,30 @@ class MySimulator(QObject, PyCustomerSimulator):
                 # 严重偏离车道，标记失败，居中奖励为 0
                 self._is_out_of_bounds = True
             else:
-                # 离中心越近，奖励越高，完全居中时拿到满分 0.5
-                r_center = 0.5 * max(0.0, (1.0 - offset / max_tolerate_offset))
+                # 离中心越近，奖励越高，完全居中时拿到满分 0.4
+                r_center = 0.4 * max(0.0, (1.0 - offset / max_tolerate_offset))
         else:
             # 找不到投影车道（开出路网外），直接判定出界
             self._is_out_of_bounds = True
             
-        # 5. 计算总奖励 [0.0, 1.0]
-        total_reward = r_survival + r_speed + r_center
+        # 5. 纵向进度奖励 (权重 0.3)
+        # 直接使用已计算的缓存值
+        s_ego = getattr(self, "_current_s_ego", 0.0)
+        s_total = getattr(self, "_current_s_total", 0.0)
         
+        r_progress = 0.0
+        if s_total > 0.0:
+            # s_ego / s_total 表示完成度，范围 [0, 1]
+            r_progress = 0.3 * np.clip(s_ego / s_total, 0.0, 1.0)
+            
+        # 6. 计算单步总奖励 [0.0, 1.0]
+        total_reward = r_survival + r_speed + r_center + r_progress
+        
+        # 7. 终点大奖
+        if getattr(self, "_is_reached_goal", False):
+            total_reward += 10.0 # 给予强力正向引导
+            print(f"  --> 获得终点大奖! (+10.0)")
+            
         return float(total_reward)
 
     def checkEgoDone(self, egoVehicle) -> bool:
@@ -318,6 +338,18 @@ class MySimulator(QObject, PyCustomerSimulator):
         if getattr(self, "_is_out_of_bounds", False):
             print("[Done] Ego 偏离车道!")
             return True
+            
+        # [新增] Frenet 纵向距离判定
+        # 直接使用已计算的缓存值
+        s_ego = getattr(self, "_current_s_ego", 0.0)
+        s_total = getattr(self, "_current_s_total", 0.0)
+        dist_to_end = s_total - s_ego
+        
+        if s_total > 0.0 and dist_to_end < 5.0:
+            print(f"[Done] Ego 成功到达终点! (剩余距离: {dist_to_end:.2f}m)")
+            self._is_reached_goal = True
+            return True
+            
         if self.stepCount >= TRAIN_MAX_STEPS:
             print("[Done] 达到最大步数")
             return True
@@ -628,6 +660,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.egoState = None # 触发 _updateEgoByRL 中的初始位姿分配
         self._is_collision = False
         self._is_out_of_bounds = False
+        self._is_reached_goal = False # [新增] 清理终点标志
         
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
@@ -1001,6 +1034,46 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
     #  工具
     # ============================================================
+
+    def _getFrenetProgress(self, path, x, y):
+        """
+        计算点 (x, y) 在给定路径 path 上的 Frenet 纵向投影距离 s，以及路径总长度 S_total。
+        返回: (s_ego, s_total, lateral_dist)
+        """
+        if not path or len(path) < 2:
+            return 0.0, 0.0, 0.0
+
+        min_dist = float('inf')
+        best_s = 0.0
+        accumulated_s = 0.0
+        best_lateral = 0.0
+
+        p = np.array([x, y])
+
+        for i in range(len(path) - 1):
+            p1 = np.array(path[i])
+            p2 = np.array(path[i + 1])
+
+            seg_vec = p2 - p1
+            seg_len = np.linalg.norm(seg_vec)
+            if seg_len < 1e-6:
+                continue
+
+            # 投影比例 t
+            t = np.dot(p - p1, seg_vec) / (seg_len * seg_len)
+            t = max(0.0, min(1.0, t))  # 限制在线段内部
+
+            proj_p = p1 + t * seg_vec
+            dist = np.linalg.norm(p - proj_p)
+
+            if dist < min_dist:
+                min_dist = dist
+                best_s = accumulated_s + t * seg_len
+                best_lateral = dist
+
+            accumulated_s += seg_len
+
+        return float(best_s), float(accumulated_s), float(best_lateral)
 
     def findBgVehicle(self, vehicles):
         """找到主车和所有背景车"""
