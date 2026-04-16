@@ -868,20 +868,20 @@ class MySimulator(QObject, PyCustomerSimulator):
             return True
 
         # 3. 检查主攻手状态
-        attacker_name = getattr(self, "_attacker_name", None)
-        if attacker_name and attacker_name in self.bgAgents:
-            agent = self.bgAgents[attacker_name]
-            if agent["progress"] >= agent["totalLength"]:
-                print("[Done] 主攻手到达终点。")
-                return True
+        # attacker_name = getattr(self, "_attacker_name", None)
+        # if attacker_name and attacker_name in self.bgAgents:
+        #     agent = self.bgAgents[attacker_name]
+        #     if agent["progress"] >= agent["totalLength"]:
+        #         print("[Done] 主攻手到达终点。")
+        #         return True
             
-            # if agent["speed"] < 0.1:
-            #     agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
-            #     if agent["_stuck_count"] > 15:
-            #         print("[Done] 探测到主攻手卡死，重置。")
-            #         return True
-            # else:
-            #     agent["_stuck_count"] = 0
+        #     if agent["speed"] < 0.1:
+        #         agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
+        #         if agent["_stuck_count"] > 15:
+        #             print("[Done] 探测到主攻手卡死，重置。")
+        #             return True
+        #     else:
+        #         agent["_stuck_count"] = 0
 
         return False
 
