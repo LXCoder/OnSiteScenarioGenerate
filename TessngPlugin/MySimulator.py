@@ -264,37 +264,52 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.applyBgActions((0.0, 0.0)) # 背景车恒速或静止
 
     def computeEgoReward(self, egoVehicle) -> float:
-        """Ego 训练奖励函数：鼓励安全、高效、居中"""
-        reward = 0.0
-        
-        # 1. 速度奖励：鼓励接近目标速度 (如 15m/s)
-        target_v = 15.0
-        v = egoVehicle.currSpeed()
-        reward += 0.2 * (1.0 - abs(v - target_v) / target_v)
-        
-        # 2. 车道居中奖励
-        laneResult = LaneProjector.fromTessngVehicle(egoVehicle, p2m)
-        if laneResult:
-            offset = abs(laneResult.lateral_offset)
-            reward -= 0.1 * (offset / MAX_LANE_WIDTH)
-            if offset > MAX_LANE_WIDTH / 2:
-                reward -= 2.0 # 偏离车道惩罚
-                self._is_out_of_bounds = True
-        
-        # 3. 碰撞惩罚
-        # 这里复用原有的检测逻辑，但标记为 Ego 失败
+        """
+        Ego 训练奖励函数（归一化正向奖励机制）：
+        单步总奖励严格限制在 [0, 1] 范围内，有助于 PPO 价值网络稳定收敛。
+        权重分配：生存(0.2) + 速度控制(0.3) + 车道居中(0.5)
+        """
+        # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
         ego_id = egoVehicle.id()
         all_vehis = self.simIface.allVehiStarted()
         for v in all_vehis:
             if v.id() != ego_id:
                 if self._check_bbox_collision_vehi(egoVehicle, v):
                     self._is_collision = True
-                    return -10.0 # 碰撞重罚
+                    return 0.0
+
+        # 2. 基础生存奖励 (权重 0.2)
+        # 只要活着且没有发生碰撞，就给予基础分数
+        r_survival = 0.2
         
-        # 4. 生存奖励
-        reward += 0.01
+        # 3. 速度奖励 (权重 0.3)
+        # 鼓励接近目标速度 (15m/s)。偏差超过 10m/s 时得分为 0
+        target_v = 15.0
+        v = egoVehicle.currSpeed()
+        speed_diff = abs(v - target_v)
+        r_speed = 0.3 * max(0.0, (1.0 - speed_diff / 10.0))
         
-        return float(reward)
+        # 4. 车道居中奖励 (权重 0.5)
+        r_center = 0.0
+        laneResult = LaneProjector.fromTessngVehicle(egoVehicle, p2m)
+        if laneResult:
+            offset = abs(laneResult.lateral_offset)
+            max_tolerate_offset = MAX_LANE_WIDTH / 2.0  # 约 2.0米
+            
+            if offset > max_tolerate_offset + 0.5:
+                # 严重偏离车道，标记失败，居中奖励为 0
+                self._is_out_of_bounds = True
+            else:
+                # 离中心越近，奖励越高，完全居中时拿到满分 0.5
+                r_center = 0.5 * max(0.0, (1.0 - offset / max_tolerate_offset))
+        else:
+            # 找不到投影车道（开出路网外），直接判定出界
+            self._is_out_of_bounds = True
+            
+        # 5. 计算总奖励 [0.0, 1.0]
+        total_reward = r_survival + r_speed + r_center
+        
+        return float(total_reward)
 
     def checkEgoDone(self, egoVehicle) -> bool:
         if getattr(self, "_is_collision", False):
