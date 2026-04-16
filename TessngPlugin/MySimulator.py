@@ -75,7 +75,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             (-742.391, 72.417), (-728.110, 54.201), (-714.054, 36.321),
             (-694.038, 10.683)
         ]
-        self.egoSmoothedPath = MultiVehicleInference._smoothPath(self.egoCenterLine, 1.0)
+        # 核心修正：参考路径统一转为数学坐标 (Y取反)
+        gui_smoothed = MultiVehicleInference._smoothPath(self.egoCenterLine, 1.0)
+        self.egoSmoothedPath = [(p[0], -p[1]) for p in gui_smoothed]
 
         # ===== 主车：由选手的 TestPlayer 控制 =====
         self.playerManager = PlayerManager()
@@ -200,10 +202,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         """根据 RL 输出的 currentControl (accel, steer) 更新 egoState"""
         if self.egoState is None:
             # 初始状态
-            init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.047, 287.819)
+            init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.047, -287.819)
             _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
-            # 关键修正：VehicleState 的 y 需为数学坐标（即 GUI 坐标取反）
-            self.egoState = VehicleState(x=init_x, y=-init_y, heading=init_heading, speed=10.0)
+            # init_y 已经是数学坐标，直接赋值
+            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=10.0)
         
         accel, steer = self.currentControl
         
@@ -372,15 +374,16 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 初始化 Ego 状态
             init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
             _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
-            self.egoState = VehicleState(x=init_x, y=-init_y, heading=init_heading, speed=10.0)
+            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=10.0)
             
             vsMap = {self.egoName: self.egoState}
             # 初始化背景车状态
             for name, agent in self.bgAgents.items():
                 agent["progress"] = 0.0
+                # 背景车路径也应视为数学坐标
                 x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
                 agent["x"], agent["y"], agent["heading"] = x, y, heading
-                vsMap[name] = VehicleState(x=x, y=-y, heading=heading, speed=agent["speed"])
+                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
                 
             self.tessAuto.setAvChannel2AvMsgMap(vsMap)
             self.tessAuto.vehicleCreate()
@@ -1163,14 +1166,14 @@ class MySimulator(QObject, PyCustomerSimulator):
                 y = ay + ratio * (by - ay)
                 dx = bx - ax
                 dy = by - ay
-                # 关键修正：TNG中 0度是北(-Y)，90度是东(+X)
-                heading = math.degrees(math.atan2(dx, -dy)) % 360.0
+                # 关键修正：在数学坐标系下(Y向上为北)，atan2(dx, dy) 直接符合 TNG Heading (北0, 顺时针)
+                heading = math.degrees(math.atan2(dx, dy)) % 360.0
                 return x, y, heading
             accumulated += segLen
         bx, by = smoothed[-1]
         ax, ay = smoothed[-2]
         dx = bx - ax
         dy = by - ay
-        heading = math.degrees(math.atan2(dx, -dy)) % 360.0
+        heading = math.degrees(math.atan2(dx, dy)) % 360.0
         return bx, by, heading
 
