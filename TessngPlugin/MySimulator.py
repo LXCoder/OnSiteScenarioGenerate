@@ -66,9 +66,21 @@ class MySimulator(QObject, PyCustomerSimulator):
         iface = tessngIFace()
         self.tessAuto = TessAutoPyInterface(iface)
 
+        # ===== Ego 路径 (同步自 TestPlayer) =====
+        self.egoCenterLine = [
+            (-650.047, 287.819), (-662.097, 272.913), (-680.481, 248.938),
+            (-693.14, 233.513), (-711.580, 211.293), (-724.399, 194.875),
+            (-733.395, 183.068), (-746.664, 167.212), (-754.873, 148.658),
+            (-759.146, 129.204), (-758.247, 108.064), (-751.612, 87.486),
+            (-742.391, 72.417), (-728.110, 54.201), (-714.054, 36.321),
+            (-694.038, 10.683)
+        ]
+        self.egoSmoothedPath = MultiVehicleInference._smoothPath(self.egoCenterLine, 1.0)
+
         # ===== 主车：由选手的 TestPlayer 控制 =====
         self.playerManager = PlayerManager()
         self.egoName = "ego"
+        # ... rest of init ...
 
         # ===== 背景车：从 Data 目录 JSON 加载，由 DQN 控制 =====
         self.scenarioLoader = ScenarioLoader(DATA_DIR)
@@ -162,23 +174,53 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._afterOneStepTraining(vehicles)
 
     # ============================================================
-    #  主车更新（每帧调用选手的 act）
+    #  主车更新
     # ============================================================
 
     def updateEgo(self):
-        """调用选手的 TestPlayer.act()，获取主车状态并更新到 Tessng"""
-        states = self.playerManager.step_all()
-        self.tessAuto.setAvChannel2AvMsgMap(states)
-        self.tessAuto.vehicleCreate()
+        """更新主车状态"""
+        if TRAIN_MODE and not self.env._closed:
+            # ===== 训练模式：由 RL 动作控制 Ego =====
+            self._updateEgoByRL()
+            self.tessAuto.vehicleCreate()
+        elif not TRAIN_MODE and getattr(self, "egoModel", None) is not None:
+            # ===== 推理模式：由 _afterOneStepInference 统一处理 =====
+            pass
+        else:
+            # ===== 普通模式：由选手代码控制 =====
+            states = self.playerManager.step_all()
+            self.tessAuto.setAvChannel2AvMsgMap(states)
+            for name, state in states.items():
+                self.egoState = state
+                self.egoName = name
+                break
+            self.tessAuto.vehicleCreate()
 
-        # 缓存主车状态（用于背景车的观测和奖励计算）
-        for name, state in states.items():
-            self.egoState = state
-            self.egoName = name
-            break
+    def _updateEgoByRL(self):
+        """根据 RL 输出的 currentControl (accel, steer) 更新 egoState"""
+        if self.egoState is None:
+            # 初始状态
+            self.egoState = VehicleState(x=-650.047, y=287.819, heading=140.0, speed=10.0)
+        
+        accel, steer = self.currentControl
+        
+        # 运动学模型更新
+        dt = self.dt
+        self.egoState.speed += accel * dt
+        self.egoState.speed = max(0.0, min(self.egoState.speed, MAX_SPEED))
+        
+        yaw_rate = (self.egoState.speed * math.tan(steer)) / WHEEL_BASE
+        self.egoState.heading = (self.egoState.heading + math.degrees(yaw_rate * dt)) % 360.0
+        
+        heading_rad = math.radians(self.egoState.heading)
+        self.egoState.x += self.egoState.speed * math.sin(heading_rad) * dt
+        self.egoState.y += self.egoState.speed * math.cos(heading_rad) * dt # 注意：此处 y 是 GUI 坐标系的逻辑
+
+        vsMap = {self.egoName: self.egoState}
+        self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
     # ============================================================
-    #  训练模式
+    #  训练模式 (Ego 训练版)
     # ============================================================
 
     def _afterOneStepTraining(self, vehicles):
@@ -187,57 +229,88 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.isFirstStep = False
             if control is not None:
                 self.currentControl = control
-                self.createBgVehicles()
+                self.createBgVehicles() # 背景车作为障碍物
             return
 
-        # 找主车和所有背景车
         egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
 
-        # 找到指定的“主攻手”作为观测基准
-        bgVehicle = None
-        for v in bgVehicles:
-            avName = self.tessAuto.tessngId2AvNameMap.get(v.id())
-            if avName == getattr(self, "_attacker_name", None):
-                bgVehicle = v
-                break
-
-        if bgVehicle is None:
+        if egoVehicle is None:
             return
 
         self.stepCount += 1
 
-        if self.stepCount == 1:
-            obs = np.zeros(94, dtype=np.float32)
-            control = self.env.onSimuStep(obs, 0.0, False)
-            if control is not None:
-                self.currentControl = control
-                self.applyBgActions(control)
-            return
-
-        obs = self.buildObs(bgVehicle, vehicles)
-        reward = self.computeReward(bgVehicle)
-        done = self.checkDone()
+        # 构建以 Ego 为中心的观测
+        obs = self.buildObs(egoVehicle, vehicles)
+        # 计算 Ego 的奖励
+        reward = self.computeEgoReward(egoVehicle)
+        done = self.checkEgoDone(egoVehicle)
 
         self.episodeReward += reward
         control = self.env.onSimuStep(obs, reward, done)
 
         if control is None:
             self.episodeCount += 1
-            bgName = list(self.bgAgents.keys())[0] if self.bgAgents else "?"
-            agent = self.bgAgents.get(bgName, {})
-            print(
-                f"[Episode {self.episodeCount}] "
-                f"场景={self.scenarios[self.currentScenarioIdx]['file']} "
-                f"步数={self.stepCount} "
-                f"距离={agent.get('progress', 0):.1f}m "
-                f"奖励={self.episodeReward:.2f}"
-            )
+            print(f"[Episode {self.episodeCount}] Ego训练: 步数={self.stepCount}, 奖励={self.episodeReward:.2f}")
             self.episodeReward = 0.0
             self.isFirstStep = True
             return
 
         self.currentControl = control
-        self.applyBgActions(control)
+        # 背景车在此模式下可以作为 NPC 运行
+        self.applyBgActions((0.0, 0.0)) # 背景车恒速或静止
+
+    def computeEgoReward(self, egoVehicle) -> float:
+        """Ego 训练奖励函数：鼓励安全、高效、居中"""
+        reward = 0.0
+        
+        # 1. 速度奖励：鼓励接近目标速度 (如 15m/s)
+        target_v = 15.0
+        v = egoVehicle.currSpeed()
+        reward += 0.2 * (1.0 - abs(v - target_v) / target_v)
+        
+        # 2. 车道居中奖励
+        laneResult = LaneProjector.fromTessngVehicle(egoVehicle, p2m)
+        if laneResult:
+            offset = abs(laneResult.lateral_offset)
+            reward -= 0.1 * (offset / MAX_LANE_WIDTH)
+            if offset > MAX_LANE_WIDTH / 2:
+                reward -= 2.0 # 偏离车道惩罚
+                self._is_out_of_bounds = True
+        
+        # 3. 碰撞惩罚
+        # 这里复用原有的检测逻辑，但标记为 Ego 失败
+        ego_id = egoVehicle.id()
+        all_vehis = self.simIface.allVehiStarted()
+        for v in all_vehis:
+            if v.id() != ego_id:
+                if self._check_bbox_collision_vehi(egoVehicle, v):
+                    self._is_collision = True
+                    return -10.0 # 碰撞重罚
+        
+        # 4. 生存奖励
+        reward += 0.01
+        
+        return float(reward)
+
+    def checkEgoDone(self, egoVehicle) -> bool:
+        if getattr(self, "_is_collision", False):
+            print("[Done] Ego 发生碰撞!")
+            return True
+        if getattr(self, "_is_out_of_bounds", False):
+            print("[Done] Ego 偏离车道!")
+            return True
+        if self.stepCount >= TRAIN_MAX_STEPS:
+            print("[Done] 达到最大步数")
+            return True
+        return False
+
+    def _check_bbox_collision_vehi(self, v1, v2):
+        p1 = v1.pos()
+        p2 = v2.pos()
+        return self._check_bbox_collision(
+            p2m(p1.x()), p2m(p1.y()), v1.angle(), v1.length(), v1.width(),
+            p2m(p2.x()), p2m(p2.y()), v2.angle(), v2.length(), v2.width()
+        )
 
     # ============================================================
     #  推理模式
@@ -245,43 +318,103 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def _afterOneStepInference(self, vehicles):
         if not getattr(self, "_inferCreated", False):
-            initStates = self.multiInfer.getInitialStates()
-            vsMap = {
-                name: VehicleState(
-                    x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"]
-                )
-                for name, s in initStates.items()
-            }
+            # 初始化 Ego 状态
+            init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
+            _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
+            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=10.0)
+            
+            vsMap = {self.egoName: self.egoState}
+            # 初始化背景车状态
+            for name, agent in self.bgAgents.items():
+                agent["progress"] = 0.0
+                x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
+                agent["x"], agent["y"], agent["heading"] = x, y, heading
+                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+                
             self.tessAuto.setAvChannel2AvMsgMap(vsMap)
             self.tessAuto.vehicleCreate()
             self._inferCreated = True
             self._inferStep = 0
+            self._is_collision = False
+            self.currentControl = (0.0, 0.0)
+            self.prevSteer = 0.0
+            self.yawRateCalc.reset()
             return
 
-        results = self.multiInfer.stepAll(vehicles, p2m, dt=self.dt)
-        vsMap = {
-            name: VehicleState(
-                x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"]
-            )
-            for name, s in results.items()
-        }
+        egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
+        if egoVehicle is None:
+            return
+
+        # 1. 控制 Ego (使用训练好的模型)
+        if hasattr(self, "egoModel") and self.egoModel is not None:
+            obs = self.buildObs(egoVehicle, vehicles)
+            action, _ = self.egoModel.predict(obs, deterministic=True)
+            
+            if RL_ALGO == "PPO":
+                accel, steer = float(action[0]), float(action[1])
+            else:
+                accel, steer = ACTION_TO_CONTROL[int(action)]
+                
+            # 更新 Ego 状态
+            dt = self.dt
+            self.egoState.speed += accel * dt
+            self.egoState.speed = max(0.0, min(self.egoState.speed, MAX_SPEED))
+            
+            yaw_rate = (self.egoState.speed * math.tan(steer)) / WHEEL_BASE
+            self.egoState.heading = (self.egoState.heading + math.degrees(yaw_rate * dt)) % 360.0
+            
+            heading_rad = math.radians(self.egoState.heading)
+            self.egoState.x += self.egoState.speed * math.sin(heading_rad) * dt
+            self.egoState.y += self.egoState.speed * math.cos(heading_rad) * dt
+            
+            self.currentControl = (accel, steer)
+            
+        vsMap = {self.egoName: self.egoState}
+
+        # 2. 控制背景车
+        USE_MODEL_FOR_BG = False  # 当前训练主车阶段，先不接入模型控制背景车
+        
+        all_bg_finished = True
+        if USE_MODEL_FOR_BG and getattr(self, "multiInfer", None) is not None:
+            results = self.multiInfer.stepAll(vehicles, p2m, dt=self.dt)
+            for name, s in results.items():
+                vsMap[name] = VehicleState(x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"])
+            all_bg_finished = self.multiInfer.allFinished
+        else:
+            for name, agent in self.bgAgents.items():
+                if agent["progress"] < agent["totalLength"]:
+                    all_bg_finished = False
+                    agent["progress"] += agent["speed"] * self.dt
+                    agent["progress"] = min(agent["progress"], agent["totalLength"])
+                    
+                x, y, heading = self._posOnPath(agent["smoothed"], agent["progress"])
+                agent["x"] = x
+                agent["y"] = y
+                agent["heading"] = heading
+                
+                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
         self._inferStep += 1
         if self._inferStep % 100 == 0:
-            print(
-                f"[推理 Step {self._inferStep}] "
-                f"背景车: {self.multiInfer.aliveCount}/{len(self.multiInfer.agents)}"
-            )
+            print(f"[推理 Step {self._inferStep}] Ego 推理中... 当前速度: {self.egoState.speed:.2f} m/s")
 
-        if self.multiInfer.allFinished:
-            print("[推理] 所有背景车到达终点，重置")
-            self.multiInfer.resetAll()
+        # 碰撞检测
+        ego_id = egoVehicle.id()
+        for v in vehicles:
+            if v.id() != ego_id:
+                if self._check_bbox_collision_vehi(egoVehicle, v):
+                    self._is_collision = True
+                    break
+        
+        # 终止与重置判断
+        if self._is_collision or self._inferStep >= TRAIN_MAX_STEPS or all_bg_finished:
+            reason = "发生碰撞" if self._is_collision else ("达到最大步数" if self._inferStep >= TRAIN_MAX_STEPS else "背景车到达终点")
+            print(f"[推理] {reason}，重置环境。")
             self._inferCreated = False
-
-            # [修复] 在推理模式下重置时，也要重置主车(Ego)的状态
-            if hasattr(self, "playerManager"):
-                self.playerManager.load_all()
+            if getattr(self, "multiInfer", None):
+                self.multiInfer.resetAll()
 
     # ============================================================
     #  训练线程
@@ -297,12 +430,10 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             print("=" * 60)
             print(f"[训练] {numScenarios} 个场景, 总步数 {TOTAL_TIMESTEPS}")
-            print(f"[训练] 每个场景 {stepsPerScenario} 步")
-            print(f"[训练] 主车由选手 TestPlayer 控制")
-            print(f"[训练] 背景车由 {RL_ALGO} 控制，目标：干扰主车")
-            for i, s in enumerate(self.scenarios):
-                print(f"  [{i}] {s['file']}: {list(s['vehicles'].keys())}")
+            print(f"[训练] 目标：训练 Ego (主车) 避障与居中行驶")
+            print(f"[训练] 背景障碍车由 JSON 加载，保持匀速")
             print("=" * 60)
+            # ... (rest of runTraining)
 
             if RL_ALGO == "PPO":
                 from stable_baselines3 import PPO
@@ -352,6 +483,17 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         elif not TRAIN_MODE:
             print(f"[推理] 加载模型: {savePath}")
+            try:
+                if RL_ALGO == "PPO":
+                    from stable_baselines3 import PPO
+                    self.egoModel = PPO.load(savePath)
+                else:
+                    from stable_baselines3 import DQN
+                    self.egoModel = DQN.load(savePath)
+                print("[推理] Ego 模型加载成功。")
+            except Exception as e:
+                print(f"[推理] 模型加载失败: {e}")
+                self.egoModel = None
         else:
             print("[训练] Data 目录无 JSON 文件")
             return
@@ -364,20 +506,21 @@ class MySimulator(QObject, PyCustomerSimulator):
         time.sleep(0.5)
 
         # 推理模式
-        print("\n[推理] 初始化多车推理...")
-        self.multiInfer = MultiVehicleInference(savePath, algo=RL_ALGO)
-        for scenario in self.scenarios:
-            prefix = scenario["file"].replace(".json", "")
-            for name, info in scenario["vehicles"].items():
-                self.multiInfer.addVehicle(
-                    f"{prefix}_{name}", info["path"], info["speed"], color=info["color"]
-                )
+        if not TRAIN_MODE:
+            print("\n[推理] 初始化多车推理(备用)...")
+            self.multiInfer = MultiVehicleInference(savePath, algo=RL_ALGO)
+            for scenario in self.scenarios:
+                prefix = scenario["file"].replace(".json", "")
+                for name, info in scenario["vehicles"].items():
+                    self.multiInfer.addVehicle(
+                        f"{prefix}_{name}", info["path"], info["speed"], color=info["color"]
+                    )
 
-        self._inferCreated = False
-        self.isFirstStep = False  # 推理模式不需要走 onFirstStep
+            self._inferCreated = False
+            self.isFirstStep = False  # 推理模式不需要走 onFirstStep
 
-        # 训练线程完成，不需要保持活着
-        print("[推理] 训练线程退出，推理由 afterOneStep 主线程驱动")
+            # 训练线程完成，不需要保持活着
+            print("[推理] 训练线程退出，推理由 afterOneStep 主线程驱动")
 
     # ============================================================
     #  场景管理
@@ -433,51 +576,25 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.tessAuto.vehicleCreate()
 
     def applyBgActions(self, control):
-        """所有背景车根据角色(主攻手/NPC)执行动作推进"""
-        accel, steer = control
-
-        # 调试输出当前动作，监控 PPO 输出的加速度和方向盘转角
-        if getattr(self, "_attacker_name", None) and np.random.rand() < 0.01:
-            print(f"[Action] {self._attacker_name} -> accel: {accel:.2f}, steer: {steer:.2f}")
-
+        """
+        背景车控制分发器。
+        当前训练 Ego 阶段：使用纯 NPC 路径跟随模式。
+        后期接入选手模型：可在此处或 _afterOneStepTraining 中加载选手的 .zip 模型并预测动作。
+        """
         vsMap = {}
+        
         for name, agent in self.bgAgents.items():
             s = agent["smoothed"]
             if len(s) < 2:
                 continue
 
-            if name == getattr(self, "_attacker_name", None):
-                # ===== 主攻手：由强化学习完全接管 =====
-                agent["speed"] += accel * self.dt
-                agent["speed"] = max(0.0, min(agent["speed"], MAX_SPEED))
+            # ===== NPC 模式：路径跟随 =====
+            agent["progress"] += agent["speed"] * self.dt
+            agent["progress"] = min(agent["progress"], agent["totalLength"])
+            x, y, heading = self._posOnPath(s, agent["progress"])
+            agent["x"], agent["y"], agent["heading"] = x, y, heading
+            vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
 
-                # 引入车辆运动学模型 (Kinematic Bicycle Model，自动驾驶中用于模拟四轮小汽车的经典单辙模型)
-                # 假设小汽车轴距为 2.8 米
-                wheelbase = WHEEL_BASE
-                yaw_rate = (agent["speed"] * math.tan(steer)) / wheelbase
-
-                agent["prevHeading"] = agent.get("heading", agent["prevHeading"])
-                agent["heading"] = (agent["prevHeading"] + math.degrees(yaw_rate * self.dt)) % 360.0
-
-                heading_rad = math.radians(agent["heading"])
-                # Tessng GUI坐标：dx = sin(heading), dy = cos(heading)
-                agent["x"] += agent["speed"] * math.sin(heading_rad) * self.dt
-                agent["y"] += agent["speed"] * math.cos(heading_rad) * self.dt
-
-                agent["progress"] += agent["speed"] * self.dt
-                agent["progress"] = min(agent["progress"], agent["totalLength"])
-            else:
-                # ===== NPC：恒定速度巡航，严格跟随路径 =====
-                agent["progress"] += agent["speed"] * self.dt
-                agent["progress"] = min(agent["progress"], agent["totalLength"])
-
-                x, y, heading = self._posOnPath(s, agent["progress"])
-                agent["x"] = x
-                agent["y"] = y
-                agent["heading"] = heading
-                agent["prevHeading"] = heading
-
-            vsMap[name] = VehicleState(x=agent["x"], y=agent["y"], heading=agent["heading"], speed=agent["speed"])
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
     # ============================================================
@@ -485,94 +602,71 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def doReset(self):
+        """重置环境状态"""
         self.yawRateCalc.reset()
         self.prevSteer = 0.0
         self.stepCount = 0
+        self.egoState = None # 触发 _updateEgoByRL 中的初始位姿分配
+        self._is_collision = False
+        self._is_out_of_bounds = False
+        
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
             agent["speed"] = info.get("speed", 10.0)
             agent["progress"] = 0.0
-
-            # 重新获取起点坐标和航向
             smoothed = agent["smoothed"]
             init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
-            if len(smoothed) >= 2:
-                dx = smoothed[1][0] - smoothed[0][0]
-                dy = smoothed[1][1] - smoothed[0][1]
-                init_heading = math.degrees(math.atan2(dx, dy)) % 360.0
-            else:
-                init_heading = 0.0
-
-            agent["prevHeading"] = init_heading
-            agent["heading"] = init_heading
-            agent["x"] = init_x
-            agent["y"] = init_y
+            agent["x"], agent["y"] = init_x, init_y
+            
         self.isFirstStep = True
-
-        # [新增] 随机选择一辆背景车作为本回合的“主攻手”
-        import random
-        if self.bgAgents:
-            self._attacker_name = random.choice(list(self.bgAgents.keys()))
-        else:
-            self._attacker_name = None
-        print(f"\n[Reset] 随机分配主攻手: {self._attacker_name}")
-
-        # [优化] 在重置环境时，重新加载选手。确保 Ego 在每次 Episode 都重置进度和状态。
-        if hasattr(self, "playerManager"):
-            self.playerManager.load_all()
+        print(f"\n[Reset] Ego 状态已重置，开始新的 Episode。")
 
     def buildInitialObs(self):
         return np.zeros(94, dtype=np.float32)
 
     # ============================================================
-    #  观测（背景车视角，包含主车信息）
+    #  观测（根据主体车辆计算）
     # ============================================================
 
-    def buildObs(self, bgVehicle, vehicles) -> np.ndarray:
+    def buildObs(self, vehicle, vehicles) -> np.ndarray:
         obs = np.zeros(94, dtype=np.float32)
-        attacker_name = getattr(self, "_attacker_name", None)
-        if attacker_name is None or attacker_name not in self.bgAgents:
-            return obs
-        agent = self.bgAgents[attacker_name]
+        
+        # 判断是 Ego 还是背景车，选择对应的路径
+        egoTessngId = self.tessAuto.avName2TessngIdMap.get(self.egoName)
+        if vehicle.id() == egoTessngId:
+            centerLine = self.egoSmoothedPath
+            v_speed = self.egoState.speed if self.egoState else vehicle.currSpeed()
+        else:
+            avName = self.tessAuto.tessngId2AvNameMap.get(vehicle.id())
+            agent = self.bgAgents.get(avName)
+            centerLine = agent["smoothed"] if agent else []
+            v_speed = agent["speed"] if agent else vehicle.currSpeed()
 
-        # 背景车自身状态
-        laneResult = LaneProjector.fromTessngVehicle(bgVehicle, p2m)
+        # 1. 基础状态 (5维 + 运动学)
+        laneResult = LaneProjector.fromTessngVehicle(vehicle, p2m)
         if laneResult:
             obs[0] = np.clip(laneResult.dist_left / MAX_LANE_WIDTH, 0, 1)
             obs[1] = np.clip(laneResult.dist_right / MAX_LANE_WIDTH, 0, 1)
-            # 车道偏移 [-L_width/2, L_width/2] -> [0, 1]，中心为 0.5
             obs[2] = np.clip((laneResult.lateral_offset / MAX_LANE_WIDTH) + 0.5, 0, 1)
-            # 角度差归一化 [0, 1]，0.5代表完全平行
             obs[3] = laneResult.angle_diff
 
-        obs[4] = np.clip(agent["speed"] / MAX_SPEED, 0, 1)
-        # 转向角: [-MAX_STEER_ANGLE, MAX_STEER_ANGLE] -> [0, 1]，0.5 是回正
+        obs[4] = np.clip(v_speed / MAX_SPEED, 0, 1)
         obs[5] = np.clip((self.currentControl[1] / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
-
-        # 加速度：[MAX_DECEL, MAX_ACCEL] -> [0, 1]
-        obs[6] = np.clip(
-            (self.currentControl[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1
-        )
-
+        obs[6] = np.clip((self.currentControl[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1)
         obs[7] = np.clip((self.prevSteer / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
         self.prevSteer = self.currentControl[1]
 
-        # 角速度映射 [-MAX_YAW_RATE, MAX_YAW_RATE] -> [0, 1]
         MAX_YAW_RATE = 1.0
-        yawRate = self.yawRateCalc.update(bgVehicle.id(), bgVehicle.angle(), self.dt)
+        yawRate = self.yawRateCalc.update(vehicle.id(), vehicle.angle(), self.dt)
         obs[8] = np.clip((yawRate / (2 * MAX_YAW_RATE)) + 0.5, 0, 1)
 
-        # 导航
-        centerLine = agent["smoothed"]
+        # 2. 导航 (13维)
         if centerLine and len(centerLine) >= 2:
             sparse = NavigationCalculator.sparsifyByDistance(centerLine, 5.0)
-            egoPos = bgVehicle.pos()
+            vPos = vehicle.pos()
             navResult = NavigationCalculator.compute(
-                p2m(egoPos.x()),
-                p2m(egoPos.y()),
-                bgVehicle.angle(),
-                sparse,
-                numCheckpoints=5,
+                p2m(vPos.x()), p2m(vPos.y()), vehicle.angle(),
+                sparse, numCheckpoints=5,
             )
             for i in range(min(5, len(navResult.forwardGaps))):
                 obs[9 + i * 2] = navResult.forwardGaps[i]
@@ -581,9 +675,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             obs[20] = navResult.curvatureDirection
             obs[21] = navResult.laneAngleDiff
 
-        # 雷达（包含主车和其他 Tessng 车辆）
+        # 3. 周车雷达 (72维)
         surroundResult = SurroundingCalculator.fromTessngVehicles(
-            bgVehicle, vehicles, p2m, maxNearby=8
+            vehicle, vehicles, p2m, maxNearby=8
         )
         for i, r in enumerate(surroundResult.radar):
             obs[22 + i] = r
