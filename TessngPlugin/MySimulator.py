@@ -274,9 +274,10 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def computeEgoReward(self, egoVehicle) -> float:
         """
-        Ego 训练奖励函数（归一化正向奖励机制）：
-        单步总奖励严格限制在 [0, 1] 范围内，有助于 PPO 价值网络稳定收敛。
-        权重分配：生存(0.1) + 速度控制(0.2) + 车道居中(0.4) + 纵向进度(0.3)
+        Ego 训练奖励函数（计件正向奖励机制）：
+        取消“按时间发工资”的生存奖励，防止模型原地苟活。
+        引入基于“单步实际前进距离(Delta S)”的奖励，鼓励高效推进。
+        权重分配：速度控制(0.3) + 车道居中(0.4) + 单步推进量(0.3)
         """
         # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
         ego_id = egoVehicle.id()
@@ -287,16 +288,14 @@ class MySimulator(QObject, PyCustomerSimulator):
                     self._is_collision = True
                     return 0.0
 
-        # 2. 基础生存奖励 (权重 0.1)
-        r_survival = 0.1
-        
-        # 3. 速度奖励 (权重 0.2)
+        # 2. 速度奖励 (权重 0.3)
+        # 鼓励接近目标速度 (15m/s)。偏差超过 10m/s 时得分为 0
         target_v = 15.0
         v = egoVehicle.currSpeed()
         speed_diff = abs(v - target_v)
-        r_speed = 0.2 * max(0.0, (1.0 - speed_diff / 10.0))
+        r_speed = 0.3 * max(0.0, (1.0 - speed_diff / 10.0))
         
-        # 4. 车道居中奖励 (权重 0.4)
+        # 3. 车道居中奖励 (权重 0.4)
         r_center = 0.0
         laneResult = LaneProjector.fromTessngVehicle(egoVehicle, p2m)
         if laneResult:
@@ -307,26 +306,36 @@ class MySimulator(QObject, PyCustomerSimulator):
                 # 严重偏离车道，标记失败，居中奖励为 0
                 self._is_out_of_bounds = True
             else:
-                # 离中心越近，奖励越高，完全居中时拿到满分 0.4
-                r_center = 0.4 * max(0.0, (1.0 - offset / max_tolerate_offset))
+                # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
+                if v > 1.0:
+                    r_center = 0.4 * max(0.0, (1.0 - offset / max_tolerate_offset))
         else:
             # 找不到投影车道（开出路网外），直接判定出界
             self._is_out_of_bounds = True
             
-        # 5. 纵向进度奖励 (权重 0.3)
+        # 4. 单步实际推进量奖励 (Delta Progress, 权重 0.3)
         # 直接使用已计算的缓存值
         s_ego = getattr(self, "_current_s_ego", 0.0)
-        s_total = getattr(self, "_current_s_total", 0.0)
+        
+        # 获取上一帧的 s_ego (若无则默认为当前值)
+        prev_s_ego = getattr(self, "_prev_s_ego", s_ego)
+        
+        # 计算本帧在路径上实际前进了多少米
+        delta_s = s_ego - prev_s_ego
+        
+        # 更新缓存以备下一帧使用
+        self._prev_s_ego = s_ego
         
         r_progress = 0.0
-        if s_total > 0.0:
-            # s_ego / s_total 表示完成度，范围 [0, 1]
-            r_progress = 0.3 * np.clip(s_ego / s_total, 0.0, 1.0)
+        if delta_s > 0.0:
+            # 假设车辆以最大合理速度 (如 20m/s) 行驶，每帧 dt=0.1s 理论最大 delta_s 为 2.0 米
+            # 这里将 delta_s / 2.0 归一化到 [0, 1]，然后乘以权重 0.3
+            r_progress = 0.3 * np.clip(delta_s / 2.0, 0.0, 1.0)
             
-        # 6. 计算单步总奖励 [0.0, 1.0]
-        total_reward = r_survival + r_speed + r_center + r_progress
+        # 5. 计算单步总奖励 [0.0, 1.0]
+        total_reward = r_speed + r_center + r_progress
         
-        # 7. 终点大奖
+        # 6. 终点大奖
         if getattr(self, "_is_reached_goal", False):
             total_reward += 10.0 # 给予强力正向引导
             print(f"  --> 获得终点大奖! (+10.0)")
@@ -663,7 +672,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.egoState = None # 触发 _updateEgoByRL 中的初始位姿分配
         self._is_collision = False
         self._is_out_of_bounds = False
-        self._is_reached_goal = False # [新增] 清理终点标志
+        self._is_reached_goal = False # 清理终点标志
+        self._prev_s_ego = 0.0 # 清理进度缓存
         
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
