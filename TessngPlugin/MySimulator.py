@@ -246,7 +246,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.stepCount += 1
         
         # 集中计算一次 Frenet 进度，供 Reward 和 Done 共用
-        self._current_s_ego, self._current_s_total, _ = self._getFrenetProgress(
+        # 此时额外解包第三个返回值：横向偏差 (lateral_dist)
+        self._current_s_ego, self._current_s_total, self._current_lateral_dist = self._getFrenetProgress(
             self.egoSmoothedPath, 
             p2m(egoVehicle.pos().x()), 
             -p2m(egoVehicle.pos().y()) # GUI转数学
@@ -277,7 +278,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         Ego 训练奖励函数（计件正向奖励机制）：
         取消“按时间发工资”的生存奖励，防止模型原地苟活。
         引入基于“单步实际前进距离(Delta S)”的奖励，鼓励高效推进。
-        权重分配：速度控制(0.3) + 车道居中(0.4) + 单步推进量(0.3)
+        权重分配：速度控制(0.3) + 轨迹居中(0.4) + 单步推进量(0.3)
         """
         # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
         ego_id = egoVehicle.id()
@@ -295,23 +296,20 @@ class MySimulator(QObject, PyCustomerSimulator):
         speed_diff = abs(v - target_v)
         r_speed = 0.3 * max(0.0, (1.0 - speed_diff / 10.0))
         
-        # 3. 车道居中奖励 (权重 0.4)
+        # 3. 轨迹居中奖励 (权重 0.4)
         r_center = 0.0
-        laneResult = LaneProjector.fromTessngVehicle(egoVehicle, p2m)
-        if laneResult:
-            offset = abs(laneResult.lateral_offset)
-            max_tolerate_offset = MAX_LANE_WIDTH / 2.0  # 约 2.0米
-            
-            if offset > max_tolerate_offset + 0.5:
-                # 严重偏离车道，标记失败，居中奖励为 0
-                self._is_out_of_bounds = True
-            else:
-                # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
-                if v > 1.0:
-                    r_center = 0.4 * max(0.0, (1.0 - offset / max_tolerate_offset))
-        else:
-            # 找不到投影车道（开出路网外），直接判定出界
+        # 从缓存中获取由 _getFrenetProgress 计算的车辆到参考路径的横向偏差
+        lateral_offset = getattr(self, "_current_lateral_dist", 0.0)
+        max_tolerate_offset = MAX_LANE_WIDTH / 2.0  # 约 2.0米
+        
+        if lateral_offset > max_tolerate_offset + 0.5:
+            # 严重偏离规划轨迹，标记失败，居中奖励为 0
             self._is_out_of_bounds = True
+        else:
+            # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
+            if v > 1.0:
+                # 离规划轨迹越近，奖励越高，完全在轨迹上时拿到满分 0.4
+                r_center = 0.4 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
             
         # 4. 单步实际推进量奖励 (Delta Progress, 权重 0.3)
         # 直接使用已计算的缓存值
@@ -393,7 +391,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
                 agent["x"], agent["y"], agent["heading"] = x, y, heading
                 vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
-                
+
             self.tessAuto.setAvChannel2AvMsgMap(vsMap)
             self.tessAuto.vehicleCreate()
             self._inferCreated = True
@@ -455,7 +453,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 agent["y"] = y
                 agent["heading"] = heading
                 
-                vsMap[name] = VehicleState(x=x, y=-y, heading=heading, speed=agent["speed"])
+                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
 
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
@@ -674,6 +672,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._is_out_of_bounds = False
         self._is_reached_goal = False # 清理终点标志
         self._prev_s_ego = 0.0 # 清理进度缓存
+        self._current_lateral_dist = 0.0 # 清理横向偏差缓存
         
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
