@@ -66,23 +66,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         iface = tessngIFace()
         self.tessAuto = TessAutoPyInterface(iface)
 
-        # ===== Ego 路径 (同步自 TestPlayer) =====
-        self.egoCenterLine = [
-            (-650.047, 287.819), (-662.097, 272.913), (-680.481, 248.938),
-            (-693.14, 233.513), (-711.580, 211.293), (-724.399, 194.875),
-            (-733.395, 183.068), (-746.664, 167.212), (-754.873, 148.658),
-            (-759.146, 129.204), (-758.247, 108.064), (-751.612, 87.486),
-            (-742.391, 72.417), (-728.110, 54.201), (-714.054, 36.321),
-            (-694.038, 10.683)
-        ]
-        # 核心修正：参考路径统一转为数学坐标 (Y取反)
-        gui_smoothed = MultiVehicleInference._smoothPath(self.egoCenterLine, 1.0)
-        self.egoSmoothedPath = [(p[0], -p[1]) for p in gui_smoothed]
-
         # ===== 主车：由选手的 TestPlayer 控制 =====
         self.playerManager = PlayerManager()
         self.egoName = "ego"
-        # ... rest of init ...
+        self.egoSmoothedPath = [] # 初始化为空，切换场景时动态加载
 
         # ===== 背景车：从 Data 目录 JSON 加载，由 DQN 控制 =====
         self.scenarioLoader = ScenarioLoader(DATA_DIR)
@@ -205,7 +192,8 @@ class MySimulator(QObject, PyCustomerSimulator):
             init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.047, -287.819)
             _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
             # init_y 已经是数学坐标，直接赋值
-            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=10.0)
+            initial_speed = getattr(self, "_ego_target_speed", 15.0)
+            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=initial_speed)
         
         accel, steer = self.currentControl
         
@@ -290,8 +278,8 @@ class MySimulator(QObject, PyCustomerSimulator):
                     return 0.0
 
         # 2. 速度奖励 (权重 0.3)
-        # 鼓励接近目标速度 (15m/s)。偏差超过 10m/s 时得分为 0
-        target_v = 15.0
+        # 鼓励接近场景配置的目标速度。偏差超过 10m/s 时得分为 0
+        target_v = getattr(self, "_ego_target_speed", 15.0)
         v = egoVehicle.currSpeed()
         speed_diff = abs(v - target_v)
         r_speed = 0.3 * max(0.0, (1.0 - speed_diff / 10.0))
@@ -381,7 +369,8 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 初始化 Ego 状态
             init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
             _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
-            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=10.0)
+            initial_speed = getattr(self, "_ego_target_speed", 15.0)
+            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=initial_speed)
             
             vsMap = {self.egoName: self.egoState}
             # 初始化背景车状态
@@ -470,7 +459,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     break
         
         # 终止与重置判断
-        if self._is_collision or self._inferStep >= TRAIN_MAX_STEPS or all_bg_finished:
+        if self._is_collision or self._inferStep >= TRAIN_MAX_STEPS:
             reason = "发生碰撞" if self._is_collision else ("达到最大步数" if self._inferStep >= TRAIN_MAX_STEPS else "背景车到达终点")
             print(f"[推理] {reason}，重置环境。")
             self._inferCreated = False
@@ -592,15 +581,47 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
         self.currentScenarioIdx = idx
         self.currentVehicles = self.scenarios[idx]["vehicles"]
+        self.egoName = "ego" # 切换场景前重置默认 Ego 名称
         self.initBgAgents()
 
     def switchScenario(self, idx):
         self.loadScenario(idx)
 
     def initBgAgents(self):
-        """初始化背景车运行状态"""
+        """初始化背景车运行状态，并加载当前场景的 Ego 参考路径"""
         self.bgAgents = {}
+        
+        # 1. 尝试从场景中提取 Ego 路径
+        ego_info = self.currentVehicles.get(self.egoName)
+        
+        if ego_info is None and len(self.currentVehicles) > 0:
+            print(f"[警告] 当前场景 {self.scenarios[self.currentScenarioIdx]['file']} 缺少名为 '{self.egoName}' 的车辆定义！")
+            # 临时补救：以第一个车辆的路径作为 Ego 路径，并在背景车中忽略它
+            fallback_name = list(self.currentVehicles.keys())[0]
+            print(f"[警告] 退路策略：将使用 '{fallback_name}' 的路径作为 Ego 路径。")
+            ego_info = self.currentVehicles[fallback_name]
+            self.egoName = fallback_name  # 同步更改名字，防止被当成背景车
+            
+        if ego_info:
+            # 核心修正：参考路径统一转为数学坐标 (Y取反)
+            gui_smoothed = MultiVehicleInference._smoothPath(ego_info["path"], 1.0)
+            self.egoSmoothedPath = [(p[0], -p[1]) for p in gui_smoothed]
+            
+            # 记录当前场景下 Ego 的期望速度
+            self._ego_target_speed = ego_info.get("speed", 15.0)
+            
+            # 如果初始状态存在，修正它的值
+            if self.egoState:
+                init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.0, -287.0)
+                _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
+                self.egoState.x, self.egoState.y, self.egoState.heading = init_x, init_y, init_heading
+                self.egoState.speed = self._ego_target_speed # 初始速度对齐期望速度
+
+        # 2. 初始化背景车状态
         for name, info in self.currentVehicles.items():
+            if name == self.egoName:
+                continue # Ego 的路径已单独处理，不计入背景车
+                
             smoothed = MultiVehicleInference._smoothPath(info["path"], 1.0)
             totalLen = MultiVehicleInference._pathLength(smoothed)
 
