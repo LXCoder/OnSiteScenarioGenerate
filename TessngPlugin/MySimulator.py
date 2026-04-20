@@ -388,6 +388,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._is_collision = False
             self.currentControl = (0.0, 0.0)
             self.prevSteer = 0.0
+            self._infer_prev_control = (0.0, 0.0) # 初始化平滑参数
             self.yawRateCalc.reset()
             return
 
@@ -401,7 +402,16 @@ class MySimulator(QObject, PyCustomerSimulator):
             action, _ = self.egoModel.predict(obs, deterministic=True)
             
             if RL_ALGO == "PPO":
-                accel, steer = float(action[0]), float(action[1])
+                # 核心修复：必须复刻训练时的动作映射逻辑
+                raw_action = np.clip(action, -1.0, 1.0)
+                accel = MAX_ACCEL * math.tanh(raw_action[0])
+                steer = MAX_STEER_ANGLE * math.tanh(raw_action[1])
+
+                # 同样要复刻动作平滑限制，防止推理时动作突变导致翻车
+                prev_accel, prev_steer = getattr(self, "_infer_prev_control", (0.0, 0.0))
+                accel = np.clip(accel, prev_accel - 1.0, prev_accel + 1.0)      # max_accel_delta = 1.0
+                steer = np.clip(steer, prev_steer - 0.08, prev_steer + 0.08)  # max_steer_delta = 0.08
+                self._infer_prev_control = (accel, steer)
             else:
                 accel, steer = ACTION_TO_CONTROL[int(action)]
                 
