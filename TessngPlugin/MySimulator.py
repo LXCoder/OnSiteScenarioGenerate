@@ -234,12 +234,18 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.stepCount += 1
         
         # 集中计算一次 Frenet 进度，供 Reward 和 Done 共用
-        # 此时额外解包第三个返回值：横向偏差 (lateral_dist)
-        self._current_s_ego, self._current_s_total, self._current_lateral_dist = self._getFrenetProgress(
+        self._current_s_ego, self._current_s_total, self._current_lateral_dist, expected_heading = self._getFrenetProgress(
             self.egoSmoothedPath, 
             p2m(egoVehicle.pos().x()), 
-            -p2m(egoVehicle.pos().y()) # GUI转数学
+            -p2m(egoVehicle.pos().y())
         )
+        
+        # 计算并保存航向角偏差 [-180, 180]
+        ego_heading = self.egoState.heading if self.egoState else egoVehicle.angle()
+        diff = (ego_heading - expected_heading) % 360.0
+        if diff > 180.0: 
+            diff -= 360.0
+        self._current_angle_diff = diff
 
         # 构建以 Ego 为中心的观测
         obs = self.buildObs(egoVehicle, vehicles)
@@ -263,10 +269,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def computeEgoReward(self, egoVehicle) -> float:
         """
-        Ego 训练奖励函数（计件正向奖励机制）：
-        取消“按时间发工资”的生存奖励，防止模型原地苟活。
-        引入基于“单步实际前进距离(Delta S)”的奖励，鼓励高效推进。
-        权重分配：速度控制(0.3) + 轨迹居中(0.4) + 单步推进量(0.3)
+        Ego 训练奖励函数 (弯道优化版)
+        统一使用 Frenet 轨迹作为基准，并引入航向对齐奖励
+        权重: 速度(0.2) + 轨迹居中(0.3) + 航向对齐(0.2) + 推进量(0.3)
         """
         # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
         ego_id = egoVehicle.id()
@@ -282,14 +287,14 @@ class MySimulator(QObject, PyCustomerSimulator):
         target_v = getattr(self, "_ego_target_speed", 15.0)
         v = egoVehicle.currSpeed()
         speed_diff = abs(v - target_v)
-        r_speed = 0.3 * max(0.0, (1.0 - speed_diff / 10.0))
+        r_speed = 0.2 * max(0.0, (1.0 - speed_diff / 10.0))
         
-        # 3. 轨迹居中奖励 (权重 0.4)
+        # 3. 轨迹居中奖励 (权重 0.3)
         r_center = 0.0
         # 从缓存中获取由 _getFrenetProgress 计算的车辆到参考路径的横向偏差
-        lateral_offset = getattr(self, "_current_lateral_dist", 0.0)
+        lateral_offset = abs(getattr(self, "_current_lateral_dist", 0.0))
         max_tolerate_offset = MAX_LANE_WIDTH / 2.0  # 约 2.0米
-        
+
         if lateral_offset > max_tolerate_offset + 0.5:
             # 严重偏离规划轨迹，标记失败，居中奖励为 0
             self._is_out_of_bounds = True
@@ -297,10 +302,18 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
             if v > 1.0:
                 # 离规划轨迹越近，奖励越高，完全在轨迹上时拿到满分 0.4
-                r_center = 0.4 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
+                r_center = 0.3 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
+
+        # 4. 航向对齐奖励 (权重 0.2)
+        angle_diff = abs(getattr(self, "_current_angle_diff", 0.0))
+        r_heading = 0.0
+        if angle_diff > 45.0:
+            self._is_out_of_bounds = True # 航向偏差过大也算出界
+        else:
+            if v > 1.0:
+                r_heading = 0.2 * max(0.0, (1.0 - angle_diff / 45.0))
             
-        # 4. 单步实际推进量奖励 (Delta Progress, 权重 0.3)
-        # 直接使用已计算的缓存值
+        # 5. 单步实际推进量奖励 (Delta Progress, 权重 0.3)
         s_ego = getattr(self, "_current_s_ego", 0.0)
         
         # 获取上一帧的 s_ego (若无则默认为当前值)
@@ -318,13 +331,13 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 这里将 delta_s / 2.0 归一化到 [0, 1]，然后乘以权重 0.3
             r_progress = 0.3 * np.clip(delta_s / 2.0, 0.0, 1.0)
             
-        # 5. 计算单步总奖励 [0.0, 1.0]
-        total_reward = r_speed + r_center + r_progress
+        # 6. 计算单步总奖励 [0.0, 1.0]
+        total_reward = r_speed + r_center + r_heading + r_progress
         
-        # 6. 终点大奖
+        # 7. 终点大奖
         if getattr(self, "_is_reached_goal", False):
             total_reward += 10.0 # 给予强力正向引导
-            print(f"  --> 获得终点大奖! (+10.0)")
+            print("  --> 获得终点大奖! (+10.0)")
             
         return float(total_reward)
 
@@ -704,6 +717,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._is_reached_goal = False # 清理终点标志
         self._prev_s_ego = 0.0 # 清理进度缓存
         self._current_lateral_dist = 0.0 # 清理横向偏差缓存
+        self._current_angle_diff = 0.0 # 清理航向角偏差缓存
         
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
@@ -1080,16 +1094,17 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def _getFrenetProgress(self, path, x, y):
         """
-        计算点 (x, y) 在给定路径 path 上的 Frenet 纵向投影距离 s，以及路径总长度 S_total。
-        返回: (s_ego, s_total, lateral_dist)
+        计算点 (x, y) 在给定路径 path 上的 Frenet 纵向投影距离 s 等信息。
+        返回: (s_ego, s_total, lateral_dist, expected_heading)
         """
         if not path or len(path) < 2:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
 
         min_dist = float('inf')
         best_s = 0.0
         accumulated_s = 0.0
         best_lateral = 0.0
+        best_heading = 0.0
 
         p = np.array([x, y])
 
@@ -1113,10 +1128,14 @@ class MySimulator(QObject, PyCustomerSimulator):
                 min_dist = dist
                 best_s = accumulated_s + t * seg_len
                 best_lateral = dist
+                
+                # TNG 坐标系航向角 (北0, 顺时针): atan2(dx, -dy)
+                dx, dy = seg_vec[0], seg_vec[1]
+                best_heading = math.degrees(math.atan2(dx, -dy)) % 360.0
 
             accumulated_s += seg_len
 
-        return float(best_s), float(accumulated_s), float(best_lateral)
+        return float(best_s), float(accumulated_s), float(best_lateral), float(best_heading)
 
     def findBgVehicle(self, vehicles):
         """找到主车和所有背景车"""
