@@ -289,9 +289,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def computeEgoReward(self, egoVehicle) -> float:
         """
-        Ego 训练奖励函数 (弯道优化版)
+        Ego 训练奖励函数 (路径优先版)
         统一使用 Frenet 轨迹作为基准，并引入航向对齐奖励与动态限速
-        权重: 速度(0.2) + 轨迹居中(0.3) + 航向对齐(0.2) + 推进量(0.3)
+        优先级：到达终点(10.0奖励) > 轨迹居中(0.35) > 航向对齐(0.30) = 推进量(0.30) > 速度匹配(0.05)
         """
         # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
         ego_id = egoVehicle.id()
@@ -302,7 +302,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     self._is_collision = True
                     return 0.0
 
-        # 2. 动态速度奖励 (权重 0.2)
+        # 2. 动态速度奖励 (权重 0.05 - 极低优先级)
         # 获取场景配置的基础目标速度
         base_target_v = getattr(self, "_ego_target_speed", 15.0)
         
@@ -312,7 +312,6 @@ class MySimulator(QObject, PyCustomerSimulator):
         real_radius = norm_radius * 1000.0
         
         # 物理公式：v_max = sqrt(a_lat * R)。假设舒适侧向加速度为 2.5 m/s^2
-        # 当半径为 20m 时，限速约为 7m/s；当半径为 1000m 时，限速约 50m/s
         curve_limit_v = math.sqrt(2.5 * max(5.0, real_radius))
         
         # 最终期望速度是场景配置与弯道物理限速的最小值
@@ -321,10 +320,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         v = egoVehicle.currSpeed()
         speed_diff = abs(v - dynamic_target_v)
         
-        # 速度奖励现在基于 dynamic_target_v 计算
-        r_speed = 0.2 * max(0.0, (1.0 - speed_diff / 10.0))
+        # 速度奖励降低权重至 0.05
+        r_speed = 0.05 * max(0.0, (1.0 - speed_diff / 10.0))
         
-        # 3. 轨迹居中奖励 (权重 0.3)
+        # 3. 轨迹居中奖励 (权重 0.35 - 最高物理权重)
         r_center = 0.0
         # 从缓存中获取由 _getFrenetProgress 计算的车辆到参考路径的横向偏差
         lateral_offset = abs(getattr(self, "_current_lateral_dist", 0.0))
@@ -336,19 +335,20 @@ class MySimulator(QObject, PyCustomerSimulator):
         else:
             # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
             if v > 1.0:
-                # 离规划轨迹越近，奖励越高，完全在轨迹上时拿到满分 0.3
-                r_center = 0.3 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
+                # 离规划轨迹越近，奖励越高
+                r_center = 0.35 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
 
-        # 4. 航向对齐奖励 (权重 0.2)
+        # 4. 航向对齐奖励 (权重 0.30 - 高优先级)
         angle_diff = getattr(self, "_current_angle_diff", 0.0)
         r_heading = 0.0
         if angle_diff > 45.0:
             self._is_out_of_bounds = True # 航向偏差过大也算出界
         else:
             if v > 1.0:
-                r_heading = 0.2 * max(0.0, (1.0 - angle_diff / 45.0))
+                # 航向角奖励增加权重至 0.30
+                r_heading = 0.30 * max(0.0, (1.0 - angle_diff / 45.0))
             
-        # 5. 单步实际推进量奖励 (Delta Progress, 权重 0.3)
+        # 5. 单步实际推进量奖励 (Delta Progress, 权重 0.20)
         # 直接使用已计算的缓存值
         s_ego = getattr(self, "_current_s_ego", 0.0)
         
@@ -363,14 +363,13 @@ class MySimulator(QObject, PyCustomerSimulator):
         
         r_progress = 0.0
         if delta_s > 0.0:
-            # 假设车辆以最大合理速度 (如 20m/s) 行驶，每帧 dt=0.1s 理论最大 delta_s 为 2.0 米
-            # 这里将 delta_s / 2.0 归一化到 [0, 1]，然后乘以权重 0.3
-            r_progress = 0.3 * np.clip(delta_s / 2.0, 0.0, 1.0)
+            # 每帧理论最大 delta_s 为 2.0 米，权重 0.30
+            r_progress = 0.30 * np.clip(delta_s / 2.0, 0.0, 1.0)
             
         # 6. 计算单步总奖励 [0.0, 1.0]
         total_reward = r_speed + r_center + r_heading + r_progress
         
-        # 7. 终点大奖
+        # 7. 终点大奖 (全局最高优先级)
         if getattr(self, "_is_reached_goal", False):
             total_reward += 10.0 # 给予强力正向引导
             print("  --> 获得终点大奖! (+10.0)")
