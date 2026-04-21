@@ -456,6 +456,13 @@ class MySimulator(QObject, PyCustomerSimulator):
         if egoVehicle is None:
             return
 
+        # 集中计算一次 Frenet 进度
+        self._current_s_ego, self._current_s_total, self._current_lateral_dist, expected_heading = self._getFrenetProgress(
+            self.egoSmoothedPath, 
+            p2m(egoVehicle.pos().x()), 
+            -p2m(egoVehicle.pos().y())
+        )
+
         # 1. 控制 Ego (使用训练好的模型)
         if hasattr(self, "egoModel") and self.egoModel is not None:
             obs = self.buildObs(egoVehicle, vehicles)
@@ -529,8 +536,26 @@ class MySimulator(QObject, PyCustomerSimulator):
                     break
         
         # 终止与重置判断
-        if self._is_collision or self._inferStep >= TRAIN_MAX_STEPS:
-            reason = "发生碰撞" if self._is_collision else ("达到最大步数" if self._inferStep >= TRAIN_MAX_STEPS else "背景车到达终点")
+        is_reached_goal = False
+        s_ego = getattr(self, "_current_s_ego", 0.0)
+        s_total = getattr(self, "_current_s_total", 0.0)
+        if s_total > 0.0 and (s_total - s_ego) < 5.0:
+            is_reached_goal = True
+        
+        is_out_of_bounds = False
+        if abs(getattr(self, "_current_lateral_dist", 0.0)) > (MAX_LANE_WIDTH / 2.0 + 0.5):
+            is_out_of_bounds = True
+
+        if self._is_collision or is_reached_goal or is_out_of_bounds or self._inferStep >= TRAIN_MAX_STEPS:
+            if self._is_collision:
+                reason = "发生碰撞"
+            elif is_reached_goal:
+                reason = "成功到达终点"
+            elif is_out_of_bounds:
+                reason = "偏离车道"
+            else:
+                reason = "达到最大步数"
+            
             print(f"[推理] {reason}，重置环境。")
             self._inferCreated = False
             if getattr(self, "multiInfer", None):
