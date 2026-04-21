@@ -204,9 +204,11 @@ class MySimulator(QObject, PyCustomerSimulator):
             if len(self.egoSmoothedPath) > 1:
                 dx = self.egoSmoothedPath[1][0] - self.egoSmoothedPath[0][0]
                 dy = self.egoSmoothedPath[1][1] - self.egoSmoothedPath[0][1]
-                init_heading = math.degrees(math.atan2(dx, -dy)) % 360.0
+                init_heading = math.degrees(math.atan2(dx, dy)) % 360.0
             else:
                 init_heading = 0.0
+
+            print(f"初始位置: ({init_x:.2f}, {init_y:.2f}), 初始航向: {init_heading:.2f}°")
                 
             # init_y 已经是数学坐标，直接赋值
             initial_speed = getattr(self, "_ego_target_speed", 15.0)
@@ -257,12 +259,12 @@ class MySimulator(QObject, PyCustomerSimulator):
             -p2m(egoVehicle.pos().y())
         )
         
-        # 计算并保存航向角偏差 [-180, 180]
+        # 计算并保存航向角最小绝对偏差 [0, 180]
         ego_heading = self.egoState.heading if self.egoState else egoVehicle.angle()
-        diff = (ego_heading - expected_heading) % 360.0
-        print(f"ego heading: {ego_heading:.2f}, expected heading: {expected_heading:.2f}, diff: {diff:.2f}")
-        if diff > 180.0: 
-            diff -= 360.0
+        raw_diff = abs(ego_heading - expected_heading) % 360.0
+        diff = 360.0 - raw_diff if raw_diff > 180.0 else raw_diff
+        
+        # print(f"ego heading: {ego_heading:.2f}, expected heading: {expected_heading:.2f}, diff: {diff:.2f}")
         self._current_angle_diff = 0.0 if self.isFirstStep else diff
 
         # 构建以 Ego 为中心的观测
@@ -323,7 +325,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 r_center = 0.3 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
 
         # 4. 航向对齐奖励 (权重 0.2)
-        angle_diff = abs(getattr(self, "_current_angle_diff", 0.0))
+        angle_diff = getattr(self, "_current_angle_diff", 0.0)
         r_heading = 0.0
         if angle_diff > 45.0:
             self._is_out_of_bounds = True # 航向偏差过大也算出界
@@ -1160,9 +1162,8 @@ class MySimulator(QObject, PyCustomerSimulator):
                 best_s = accumulated_s + t * seg_len
                 best_lateral = dist
                 
-                # TNG 坐标系航向角 (北0, 顺时针): atan2(dx, -dy)
                 dx, dy = seg_vec[0], seg_vec[1]
-                best_heading = math.degrees(math.atan2(dx, -dy)) % 360.0
+                best_heading = math.degrees(math.atan2(dx, dy)) % 360.0
 
             accumulated_s += seg_len
 
