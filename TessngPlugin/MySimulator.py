@@ -194,7 +194,20 @@ class MySimulator(QObject, PyCustomerSimulator):
         if self.egoState is None:
             # 初始状态
             init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.047, -287.819)
-            _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
+            _, _, init_heading_math = self._posOnPath(self.egoSmoothedPath, 0.0)
+            
+            # _posOnPath 返回的是基于数学坐标 (Y向北) 的 atan2(dx, dy) 角度
+            # 我们需要将其转换为 TESSNG 坐标系 (Y向南，北0顺时针) 下的航向角
+            # 转换公式：从逆时针转顺时针，需从360减去，加上对齐偏差
+            # TNG_Heading = atan2(dx, -dy)
+            # 这里我们通过重新计算来确保准确性，因为 _posOnPath 内部丢失了 dy 符号
+            if len(self.egoSmoothedPath) > 1:
+                dx = self.egoSmoothedPath[1][0] - self.egoSmoothedPath[0][0]
+                dy = self.egoSmoothedPath[1][1] - self.egoSmoothedPath[0][1]
+                init_heading = math.degrees(math.atan2(dx, -dy)) % 360.0
+            else:
+                init_heading = 0.0
+                
             # init_y 已经是数学坐标，直接赋值
             initial_speed = getattr(self, "_ego_target_speed", 15.0)
             self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=initial_speed)
@@ -354,6 +367,17 @@ class MySimulator(QObject, PyCustomerSimulator):
             print("[Done] Ego 偏离车道!")
             return True
             
+        # [新增] 低速卡死判定：防止在弯道极速龟爬苟活
+        v = egoVehicle.currSpeed()
+        if v < 1.0:
+            self._ego_stuck_count = getattr(self, "_ego_stuck_count", 0) + 1
+        else:
+            self._ego_stuck_count = 0
+            
+        if getattr(self, "_ego_stuck_count", 0) > 50:
+            print("[Done] Ego 陷入低速卡死状态!")
+            return True
+            
         # [新增] Frenet 纵向距离判定
         # 直接使用已计算的缓存值
         s_ego = getattr(self, "_current_s_ego", 0.0)
@@ -365,9 +389,10 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._is_reached_goal = True
             return True
             
-        if self.stepCount >= TRAIN_MAX_STEPS:
-            print("[Done] 达到最大步数")
-            return True
+        # 取消最大步数限制，由目标到达、碰撞、出界或卡死来决定结束
+        # if self.stepCount >= TRAIN_MAX_STEPS:
+        #     print("[Done] 达到最大步数")
+        #     return True
         return False
 
     def _check_bbox_collision_vehi(self, v1, v2):
@@ -723,6 +748,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._prev_s_ego = 0.0 # 清理进度缓存
         self._current_lateral_dist = 0.0 # 清理横向偏差缓存
         self._current_angle_diff = 0.0 # 清理航向角偏差缓存
+        self._ego_stuck_count = 0 # 清理卡死计数
         
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
