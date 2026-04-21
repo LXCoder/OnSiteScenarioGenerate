@@ -31,8 +31,9 @@ from typing import List, Dict, Any
 
 class ScenarioLoader:
 
-    def __init__(self, dataDir: str):
+    def __init__(self, dataDir: str, filter_scenes: list = []):
         self.dataDir = dataDir
+        self.filter_scenes = filter_scenes
 
     def loadAll(self) -> List[Dict[str, Any]]:
         """
@@ -46,7 +47,13 @@ class ScenarioLoader:
             return []
 
         scenarios = []
-        jsonFiles = sorted([f for f in os.listdir(self.dataDir) if f.endswith('.json')])
+        jsonFiles = sorted(
+            [
+                f
+                for f in os.listdir(self.dataDir)
+                if f.endswith(".json") and f not in self.filter_scenes
+            ]
+        )
 
         for filename in jsonFiles:
             filepath = os.path.join(self.dataDir, filename)

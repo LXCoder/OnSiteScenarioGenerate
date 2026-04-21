@@ -46,6 +46,7 @@ from Utils.Constant import (
     TRAIN_MODE,
     TOTAL_TIMESTEPS,
     DATA_DIR,
+    FILTER_SCENES,
     RL_ALGO,
     MODEL_SAVE_DIR,
     TENSORBOARD_LOG,
@@ -72,7 +73,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.egoSmoothedPath = [] # 初始化为空，切换场景时动态加载
 
         # ===== 背景车：从 Data 目录 JSON 加载，由 DQN 控制 =====
-        self.scenarioLoader = ScenarioLoader(DATA_DIR)
+        scene_dir = os.path.join(DATA_DIR, "test")
+        if TRAIN_MODE:
+            scene_dir = os.path.join(DATA_DIR, "train")
+        self.scenarioLoader = ScenarioLoader(scene_dir, FILTER_SCENES)
         self.scenarios = self.scenarioLoader.loadAll()
 
         # 当前场景
@@ -243,9 +247,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 计算并保存航向角偏差 [-180, 180]
         ego_heading = self.egoState.heading if self.egoState else egoVehicle.angle()
         diff = (ego_heading - expected_heading) % 360.0
+        print(f"ego heading: {ego_heading:.2f}, expected heading: {expected_heading:.2f}, diff: {diff:.2f}")
         if diff > 180.0: 
             diff -= 360.0
-        self._current_angle_diff = diff
+        self._current_angle_diff = 0.0 if self.isFirstStep else diff
 
         # 构建以 Ego 为中心的观测
         obs = self.buildObs(egoVehicle, vehicles)

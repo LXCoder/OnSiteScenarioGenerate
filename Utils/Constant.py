@@ -9,6 +9,7 @@ MAX_DECEL = -7.0
 TRAIN_MODE = True
 TOTAL_TIMESTEPS = 500000
 DATA_DIR = "Data"
+FILTER_SCENES = ["scene_07.json","scene_07.json"]
 
 # 车辆参数
 WHEEL_BASE = 2.8    # 轴距
@@ -17,4 +18,4 @@ WHEEL_BASE = 2.8    # 轴距
 RL_ALGO = "PPO"
 MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
 TENSORBOARD_LOG = "./Log/"
-TRAIN_MAX_STEPS = 400
+TRAIN_MAX_STEPS = 1000
