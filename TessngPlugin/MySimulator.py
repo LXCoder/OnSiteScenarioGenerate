@@ -207,7 +207,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 init_heading = math.degrees(math.atan2(dx, dy)) % 360.0
             else:
                 init_heading = 0.0
-
+                
             print(f"初始位置: ({init_x:.2f}, {init_y:.2f}), 初始航向: {init_heading:.2f}°")
                 
             # init_y 已经是数学坐标，直接赋值
@@ -290,7 +290,7 @@ class MySimulator(QObject, PyCustomerSimulator):
     def computeEgoReward(self, egoVehicle) -> float:
         """
         Ego 训练奖励函数 (弯道优化版)
-        统一使用 Frenet 轨迹作为基准，并引入航向对齐奖励
+        统一使用 Frenet 轨迹作为基准，并引入航向对齐奖励与动态限速
         权重: 速度(0.2) + 轨迹居中(0.3) + 航向对齐(0.2) + 推进量(0.3)
         """
         # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
@@ -302,11 +302,26 @@ class MySimulator(QObject, PyCustomerSimulator):
                     self._is_collision = True
                     return 0.0
 
-        # 2. 速度奖励 (权重 0.3)
-        # 鼓励接近场景配置的目标速度。偏差超过 10m/s 时得分为 0
-        target_v = getattr(self, "_ego_target_speed", 15.0)
+        # 2. 动态速度奖励 (权重 0.2)
+        # 获取场景配置的基础目标速度
+        base_target_v = getattr(self, "_ego_target_speed", 15.0)
+        
+        # [新增] 动态限速逻辑：根据弯道曲率半径下调期望速度
+        # self._current_curvature_radius 是 [0, 1] 归一化的值，对应 [0, 1000m]
+        norm_radius = getattr(self, "_current_curvature_radius", 1.0)
+        real_radius = norm_radius * 1000.0
+        
+        # 物理公式：v_max = sqrt(a_lat * R)。假设舒适侧向加速度为 2.5 m/s^2
+        # 当半径为 20m 时，限速约为 7m/s；当半径为 1000m 时，限速约 50m/s
+        curve_limit_v = math.sqrt(2.5 * max(5.0, real_radius))
+        
+        # 最终期望速度是场景配置与弯道物理限速的最小值
+        dynamic_target_v = min(base_target_v, curve_limit_v)
+        
         v = egoVehicle.currSpeed()
-        speed_diff = abs(v - target_v)
+        speed_diff = abs(v - dynamic_target_v)
+        
+        # 速度奖励现在基于 dynamic_target_v 计算
         r_speed = 0.2 * max(0.0, (1.0 - speed_diff / 10.0))
         
         # 3. 轨迹居中奖励 (权重 0.3)
@@ -321,7 +336,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         else:
             # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
             if v > 1.0:
-                # 离规划轨迹越近，奖励越高，完全在轨迹上时拿到满分 0.4
+                # 离规划轨迹越近，奖励越高，完全在轨迹上时拿到满分 0.3
                 r_center = 0.3 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
 
         # 4. 航向对齐奖励 (权重 0.2)
@@ -334,6 +349,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 r_heading = 0.2 * max(0.0, (1.0 - angle_diff / 45.0))
             
         # 5. 单步实际推进量奖励 (Delta Progress, 权重 0.3)
+        # 直接使用已计算的缓存值
         s_ego = getattr(self, "_current_s_ego", 0.0)
         
         # 获取上一帧的 s_ego (若无则默认为当前值)
@@ -810,6 +826,9 @@ class MySimulator(QObject, PyCustomerSimulator):
                 p2m(vPos.x()), p2m(vPos.y()), vehicle.angle(),
                 sparse, numCheckpoints=5,
             )
+            # [新增] 缓存归一化的曲率半径，供奖励函数计算动态限速
+            self._current_curvature_radius = navResult.curvatureRadius 
+            
             for i in range(min(5, len(navResult.forwardGaps))):
                 obs[9 + i * 2] = navResult.forwardGaps[i]
                 obs[9 + i * 2 + 1] = navResult.lateralGaps[i]
