@@ -291,7 +291,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         """
         Ego 训练奖励函数 (路径优先版)
         统一使用 Frenet 轨迹作为基准，并引入航向对齐奖励与动态限速
-        优先级：到达终点(10.0奖励) > 轨迹居中(0.35) > 航向对齐(0.30) = 推进量(0.30) > 速度匹配(0.05)
+        优先级：到达终点(10.0奖励) > 轨迹居中(0.35) > 航向对齐(0.30) = 推进量(0.35) > 速度匹配(0.05)
         """
         # 1. 碰撞检测 (若碰撞，本步奖励为 0.0，并标记结束)
         ego_id = egoVehicle.id()
@@ -321,7 +321,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         speed_diff = abs(v - dynamic_target_v)
         
         # 速度奖励降低权重至 0.05
-        r_speed = 0.05 * max(0.0, (1.0 - speed_diff / 10.0))
+        # r_speed = 0.05 * max(0.0, (1.0 - speed_diff / 10.0))
         
         # 3. 轨迹居中奖励 (权重 0.35 - 最高物理权重)
         r_center = 0.0
@@ -364,10 +364,12 @@ class MySimulator(QObject, PyCustomerSimulator):
         r_progress = 0.0
         if delta_s > 0.0:
             # 每帧理论最大 delta_s 为 2.0 米，权重 0.30
-            r_progress = 0.30 * np.clip(delta_s / 2.0, 0.0, 1.0)
+            r_progress = 0.35 * np.clip(delta_s / 2.0, 0.0, 1.0)
             
         # 6. 计算单步总奖励 [0.0, 1.0]
-        total_reward = r_speed + r_center + r_heading + r_progress
+        # total_reward = r_speed + r_center + r_heading + r_progress
+        total_reward =  r_center + r_heading + r_progress
+
         
         # 7. 终点大奖 (全局最高优先级)
         if getattr(self, "_is_reached_goal", False):
