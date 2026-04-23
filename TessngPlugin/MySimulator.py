@@ -525,7 +525,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         self._inferStep += 1
         if self._inferStep % 100 == 0:
-            print(f"[推理 Step {self._inferStep}] Ego 推理中... 当前速度: {self.egoState.speed:.2f} m/s")
+            print(
+                f"[推理 Step {self._inferStep}] Ego 推理中... 当前速度: {self.egoState.speed:.2f} m/s 当前朝向: {self.egoState.heading:.2f}"
+            )
 
         # 碰撞检测
         ego_id = egoVehicle.id()
@@ -546,7 +548,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         if abs(getattr(self, "_current_lateral_dist", 0.0)) > (MAX_LANE_WIDTH / 2.0 + 0.5):
             is_out_of_bounds = True
 
-        if self._is_collision or is_reached_goal or is_out_of_bounds or self._inferStep >= TRAIN_MAX_STEPS:
+        if self._is_collision or is_reached_goal or is_out_of_bounds:
             if self._is_collision:
                 reason = "发生碰撞"
             elif is_reached_goal:

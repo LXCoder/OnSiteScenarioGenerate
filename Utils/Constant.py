@@ -6,10 +6,10 @@ MAX_ACCEL = 7.0
 MAX_DECEL = -7.0
 
 # ===== 配置 =====
-TRAIN_MODE = True
-TOTAL_TIMESTEPS = 500000
+TRAIN_MODE = False
+TOTAL_TIMESTEPS = 2000000
 DATA_DIR = "Data"
-FILTER_SCENES = ["scene_07.json","scene_07.json"]
+FILTER_SCENES = ["scene_10.json","scene_11.json"]
 
 # 车辆参数
 WHEEL_BASE = 2.8    # 轴距
