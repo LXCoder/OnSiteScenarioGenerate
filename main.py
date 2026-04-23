@@ -15,6 +15,7 @@ sys.path.insert(0, str(tessng_plugin_dir))
 from PySide2.QtWidgets import QApplication
 import Tessng
 from TessngPlugin.MyPlugin import *
+from Utils.Constant import NET_PATH
 
 
 if __name__ == '__main__':
@@ -22,7 +23,7 @@ if __name__ == '__main__':
 
     workspace = os.fspath(Path(__file__).resolve().parent)
     config = {'__workspace':workspace,
-              '__netfilepath': r"Data\YYT_TJST_0619_unlimited.tess",
+              '__netfilepath': NET_PATH,
               '__simuafterload': True,
               '__custsimubysteps': False
               }

@@ -94,6 +94,10 @@ class TessAutoPyInterface(object):
 		if autoInterface:
 			avVehiclePtr = autoInterface.createExternalVehicle(vs)
 			print(f"avName {avName}, try to create av, point is [{state.x}, {-state.y}]")
+			if avName == "ego":
+				veh = avVehiclePtr.getVehicle()
+				veh.setColor("#02f13e")
+				print(f"avName {avName}, set color to #fc0703")
 		else:
 			print("tessng auto interface is null")
 

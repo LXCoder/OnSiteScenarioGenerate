@@ -27,6 +27,8 @@ JSON 文件格式：
 import os
 import json
 from typing import List, Dict, Any
+from Utils.ConvertXosc2Scene import parse_xosc
+from Utils.Constant import USE_TEST_LOGIC
 
 
 class ScenarioLoader:
@@ -42,22 +44,50 @@ class ScenarioLoader:
         Returns:
             [{"file": "xxx.json", "vehicles": {name: {"path": [(x,y),...], "speed": float}}}, ...]
         """
-        if not os.path.isdir(self.dataDir):
-            print(f"[ScenarioLoader] 目录不存在: {self.dataDir}")
-            return []
+        
 
-        scenarios = []
-        jsonFiles = sorted(
-            [
+        jsonFiles = []
+        if USE_TEST_LOGIC:
+
+            if not os.path.isdir(self.dataDir):
+                print(f"[ScenarioLoader] 目录不存在: {self.dataDir}")
+                return []
+            
+            jsonFiles = [
                 f
                 for f in os.listdir(self.dataDir)
                 if f.endswith(".json") and f not in self.filter_scenes
             ]
-        )
 
+        else:
+            for folder_item in os.listdir(self.dataDir):
+                scene_folder = os.path.join(self.dataDir, folder_item)
+                xodr_path, xosc_path = None, None
+                for file_item in os.listdir(scene_folder):
+                    if file_item.endswith(".xodr"):
+                        xodr_path = os.path.join(scene_folder, file_item)
+
+                    if file_item.endswith(".xosc"):
+                        xosc_path = os.path.join(scene_folder, file_item)
+
+                    if xodr_path and xosc_path:
+                        jsonFiles.append(xosc_path)
+                        break
+
+        jsonFiles = sorted(jsonFiles)
+
+        scenarios = []
         for filename in jsonFiles:
-            filepath = os.path.join(self.dataDir, filename)
-            scenario = self.loadFile(filepath)
+            if USE_TEST_LOGIC:
+                filepath = os.path.join(self.dataDir, filename)
+                scenario = self.loadFile(filepath)
+            else:
+                scenario = parse_xosc(filename)
+                traj = [
+                    [pos[0], -pos[1]] for pos in scenario["vehicles"]["ego"]["path"]
+                ]
+                scenario["vehicles"]["ego"]["path"] = traj
+            
             if scenario:
                 scenario["file"] = filename
                 scenarios.append(scenario)
