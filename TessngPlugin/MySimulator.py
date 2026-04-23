@@ -469,16 +469,18 @@ class MySimulator(QObject, PyCustomerSimulator):
             action, _ = self.egoModel.predict(obs, deterministic=True)
             
             if RL_ALGO == "PPO":
-                # 核心修复：必须复刻训练时的动作映射逻辑
-                raw_action = np.clip(action, -1.0, 1.0)
-                accel = MAX_ACCEL * math.tanh(raw_action[0])
-                steer = MAX_STEER_ANGLE * math.tanh(raw_action[1])
+                # 核心修复：直接读取物理动作值并截断
+                accel = np.clip(action[0], -7.0, 7.0)
+                steer = np.clip(action[1], -0.7, 0.7)
 
                 # 同样要复刻动作平滑限制，防止推理时动作突变导致翻车
                 prev_accel, prev_steer = getattr(self, "_infer_prev_control", (0.0, 0.0))
                 accel = np.clip(accel, prev_accel - 1.0, prev_accel + 1.0)      # max_accel_delta = 1.0
                 steer = np.clip(steer, prev_steer - 0.08, prev_steer + 0.08)  # max_steer_delta = 0.08
-                self._infer_prev_control = (accel, steer)
+                self._infer_prev_control = (float(accel), float(steer))
+                
+                accel = float(accel)
+                steer = float(steer)
             else:
                 accel, steer = ACTION_TO_CONTROL[int(action)]
                 

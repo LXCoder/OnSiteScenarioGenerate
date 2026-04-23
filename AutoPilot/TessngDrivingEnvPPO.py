@@ -42,10 +42,9 @@ class TessngDrivingEnvPPO(gym.Env):
         )
         
         # 动作空间：连续 [accel, steer]
-        
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0]),
-            high=np.array([1.0, 1.0]),
+            low=np.array([-7.0, -0.7]),
+            high=np.array([7.0, 0.7]),
             dtype=np.float32
         )
 
@@ -93,15 +92,11 @@ class TessngDrivingEnvPPO(gym.Env):
         if self._closed:
             raise RuntimeError("环境已关闭")
 
-        # ========= 1 raw action =========
-        raw_action = np.clip(action, -1.0, 1.0)
+        # ========= 1 raw action & clip to physical bounds =========
+        accel = np.clip(action[0], -7.0, 7.0)
+        steer = np.clip(action[1], -0.7, 0.7)
 
-        # ========= 2 tanh squash =========
-        # 关键：防止边界卡死,tanh 起到平滑作用，不会卡在边界
-        accel = MAX_ACCEL * np.tanh(raw_action[0])
-        steer = MAX_STEER_ANGLE * np.tanh(raw_action[1])
-
-        # ========= 3 动作平滑（防 collapse）=========
+        # ========= 2 动作平滑（防 collapse）=========
         prev_accel, prev_steer = self._prev_control
 
         accel = np.clip(
@@ -120,7 +115,7 @@ class TessngDrivingEnvPPO(gym.Env):
         self._prev_control = np.array([accel, steer], dtype=np.float32)
 
         self._control = (float(accel), float(steer))
-        self._action = raw_action
+        self._action = np.array([accel, steer], dtype=np.float32)
 
         # ========= 5 同步 =========
         self._obsReady.clear()
