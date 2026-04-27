@@ -258,12 +258,14 @@ class MultiVehicleInference:
 
     def resetAll(self, speed: float = 10.0):
         """重置所有车到起点"""
-        for agent in self.agents.values():
+        for name, agent in self.agents.items():
             agent.speed = speed
             agent.progress = 0.0
             agent.alive = True
             agent.x, agent.y, agent.heading = self._posOnPath(agent.smoothedPath, 0.0)
             agent.prevHeading = agent.heading
+            if name == "ago":
+                print(f"[MultiInfer] 重置 '{name}' 到起点: x={agent.x:.1f}, y={agent.y:.1f}, heading={agent.heading:.1f}")
 
     @property
     def allFinished(self) -> bool:
