@@ -462,6 +462,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         if egoVehicle is None:
             return
 
+        egoVehicle.setColor("#02f13e")
         # 集中计算一次 Ego 的 Frenet 进度（用于终止判断）
         self._current_s_ego, self._current_s_total, self._current_lateral_dist, _ = self._getFrenetProgress(
             self.egoSmoothedPath, 
@@ -471,6 +472,8 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         vsMap = {}
         
+        is_debug_info =  self._inferStep % 100 == 0
+
         # 1. 控制 Ego (使用模型)
         if hasattr(self, "egoModel") and self.egoModel is not None:
             obs = self.buildObs(egoVehicle, vehicles)
@@ -522,13 +525,18 @@ class MySimulator(QObject, PyCustomerSimulator):
                 st.y += st.speed * math.cos(h_rad) * self.dt
                 vsMap[avName] = st
 
-        self.tessAuto.setAvChannel2AvMsgMap(vsMap)
+                if is_debug_info:
+                    print(
+                        f"[推理 Step {self._inferStep}] 背景车 {avName} 推理中... 当前速度: {st.speed:.2f} m/s 当前朝向: {st.heading:.2f}"
+                    )
 
-        self._inferStep += 1
-        if self._inferStep % 100 == 0:
+        self.tessAuto.setAvChannel2AvMsgMap(vsMap)
+        if is_debug_info:
             print(
                 f"[推理 Step {self._inferStep}] Ego 推理中... 当前速度: {self.egoState.speed:.2f} m/s 当前朝向: {self.egoState.heading:.2f}"
             )
+
+        self._inferStep += 1
 
         # 碰撞检测
         ego_id = egoVehicle.id()

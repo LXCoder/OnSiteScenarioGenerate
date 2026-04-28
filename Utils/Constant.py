@@ -9,10 +9,11 @@ MAX_ACC_DELTA = 1.0
 
 # ===== 配置 =====
 TRAIN_MODE = True
-TOTAL_TIMESTEPS = 2000000
+TOTAL_TIMESTEPS = 4000000
 # DATA_DIR = "Data/prod"
 DATA_DIR = "Data"
-FILTER_SCENES = [f"scene_{i:02d}.json" for i in range(1, 12)]
+# global filter scenes
+FILTER_SCENES = [f"scene_{i:02d}.json" for i in range(3, 12)]
 
 # NET_PATH = r"Data\scenario_0a5c9dbc.tess"
 # NET_PATH = r"Data\scenario_0a6bf824.tess"
@@ -25,8 +26,8 @@ WHEEL_BASE = 2.8  # 轴距
 # 选择强化学习算法: "DQN" 或 "PPO"
 RL_ALGO = "PPO"
 MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
-EGO_MODEL_FILENAME = "ego_model.zip"
-BG_MODEL_FILENAME = "bg_model.zip"
+EGO_MODEL_FILENAME = "model.zip.v8"
+BG_MODEL_FILENAME = "model.zip.v6"
 TENSORBOARD_LOG = "./Log/"
 TRAIN_MAX_STEPS = 1000
 

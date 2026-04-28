@@ -264,7 +264,7 @@ class MultiVehicleInference:
             agent.alive = True
             agent.x, agent.y, agent.heading = self._posOnPath(agent.smoothedPath, 0.0)
             agent.prevHeading = agent.heading
-            if name == "ago":
+            if name.endswith("_ego") or name == "ego":
                 print(f"[MultiInfer] 重置 '{name}' 到起点: x={agent.x:.1f}, y={agent.y:.1f}, heading={agent.heading:.1f}")
 
     @property
