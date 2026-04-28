@@ -4,6 +4,8 @@ MAX_SPEED = 33.3
 MAX_STEER_ANGLE = 0.7
 MAX_ACCEL = 7.0
 MAX_DECEL = -7.0
+MAX_STEER_DELTA = 0.05
+MAX_ACC_DELTA = 1.0
 
 # ===== 配置 =====
 TRAIN_MODE = True
@@ -23,6 +25,8 @@ WHEEL_BASE = 2.8  # 轴距
 # 选择强化学习算法: "DQN" 或 "PPO"
 RL_ALGO = "PPO"
 MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
+EGO_MODEL_FILENAME = "ego_model.zip"
+BG_MODEL_FILENAME = "bg_model.zip"
 TENSORBOARD_LOG = "./Log/"
 TRAIN_MAX_STEPS = 1000
 

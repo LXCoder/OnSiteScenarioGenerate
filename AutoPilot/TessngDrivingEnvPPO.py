@@ -18,7 +18,13 @@ import numpy as np
 import gym
 from gym import spaces
 from typing import Optional, Dict, Any, Tuple
-from Utils.Constant import MAX_ACCEL,MAX_STEER_ANGLE
+from Utils.Constant import (
+    MAX_ACCEL,
+    MAX_STEER_ANGLE,
+    MAX_DECEL,
+    MAX_STEER_DELTA,
+    MAX_ACC_DELTA,
+)
 
 
 OBS_DIM = 94
@@ -40,20 +46,20 @@ class TessngDrivingEnvPPO(gym.Env):
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32
         )
-        
+
         # 动作空间：连续 [accel, steer]
         self.action_space = spaces.Box(
-            low=np.array([-7.0, -0.7]),
-            high=np.array([7.0, 0.7]),
-            dtype=np.float32
+            low=np.array([MAX_DECEL, -MAX_STEER_ANGLE]),
+            high=np.array([MAX_ACCEL, MAX_STEER_ANGLE]),
+            dtype=np.float32,
         )
 
         # ===== 动作平滑参数 =====
         self._prev_control = np.array([0.0, 0.0], dtype=np.float32)
 
         # 控制变化率限制（非常关键）
-        self._max_accel_delta = 1.0     # m/s² per step
-        self._max_steer_delta = 0.05    # rad per step
+        self._max_accel_delta = MAX_ACC_DELTA  # m/s² per step
+        self._max_steer_delta = MAX_STEER_DELTA  # rad per step
 
         # ===== 线程同步 =====
         self._actionReady = threading.Event()
@@ -62,7 +68,7 @@ class TessngDrivingEnvPPO(gym.Env):
         self._resetDone = threading.Event()
 
         # ===== 共享数据 =====
-        self._action: Optional[np.ndarray] = None        # 连续动作 [accel, steer]
+        self._action: Optional[np.ndarray] = None  # 连续动作 [accel, steer]
         self._control: Tuple[float, float] = (0.0, 0.0)  # 对应的 (accel, steer)
         self._obs: Optional[np.ndarray] = None
         self._reward: float = 0.0
@@ -145,7 +151,7 @@ class TessngDrivingEnvPPO(gym.Env):
 
         self._done = False
         self._truncated = False
-        
+
         # 重置动作历史（防继承极端策略）
         self._prev_control[:] = 0.0
 

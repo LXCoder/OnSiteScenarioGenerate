@@ -50,7 +50,9 @@ from Utils.Constant import (
     RL_ALGO,
     MODEL_SAVE_DIR,
     TENSORBOARD_LOG,
-    TRAIN_MAX_STEPS
+    TRAIN_MAX_STEPS,
+    MAX_ACC_DELTA,
+    MAX_STEER_DELTA
 )
 
 
@@ -111,6 +113,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.stepCount = 0
         self.episodeReward = 0.0
         self.episodeCount = 0
+        
+        # 多模型配置
+        self.egoModel = None
+        self.bgModel = None
 
     # ============================================================
     #  Tessng 生命周期
@@ -434,24 +440,21 @@ class MySimulator(QObject, PyCustomerSimulator):
             _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
             initial_speed = getattr(self, "_ego_target_speed", 15.0)
             self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=initial_speed)
+            self._ego_prev_control = (0.0, 0.0)
             
             vsMap = {self.egoName: self.egoState}
             # 初始化背景车状态
             for name, agent in self.bgAgents.items():
-                agent["progress"] = 0.0
-                # 背景车路径也应视为数学坐标
                 x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
-                agent["x"], agent["y"], agent["heading"] = x, y, heading
-                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+                agent["state"] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+                agent["prev_control"] = (0.0, 0.0)
+                vsMap[name] = agent["state"]
 
             self.tessAuto.setAvChannel2AvMsgMap(vsMap)
             self.tessAuto.vehicleCreate()
             self._inferCreated = True
             self._inferStep = 0
             self._is_collision = False
-            self.currentControl = (0.0, 0.0)
-            self.prevSteer = 0.0
-            self._infer_prev_control = (0.0, 0.0) # 初始化平滑参数
             self.yawRateCalc.reset()
             return
 
@@ -459,72 +462,65 @@ class MySimulator(QObject, PyCustomerSimulator):
         if egoVehicle is None:
             return
 
-        # 集中计算一次 Frenet 进度
-        self._current_s_ego, self._current_s_total, self._current_lateral_dist, expected_heading = self._getFrenetProgress(
+        # 集中计算一次 Ego 的 Frenet 进度（用于终止判断）
+        self._current_s_ego, self._current_s_total, self._current_lateral_dist, _ = self._getFrenetProgress(
             self.egoSmoothedPath, 
             p2m(egoVehicle.pos().x()), 
             -p2m(egoVehicle.pos().y())
         )
 
-        # 1. 控制 Ego (使用训练好的模型)
+        vsMap = {}
+        
+        # 1. 控制 Ego (使用模型)
         if hasattr(self, "egoModel") and self.egoModel is not None:
             obs = self.buildObs(egoVehicle, vehicles)
             action, _ = self.egoModel.predict(obs, deterministic=True)
             
-            if RL_ALGO == "PPO":
-                # 核心修复：直接读取物理动作值并截断
-                accel = np.clip(action[0], -7.0, 7.0)
-                steer = np.clip(action[1], -0.7, 0.7)
+            # 直接读取物理动作值并截断
+            accel = np.clip(action[0], MAX_DECEL, MAX_ACCEL)
+            steer = np.clip(action[1], -MAX_STEER_ANGLE, MAX_STEER_ANGLE)
 
-                # 同样要复刻动作平滑限制，防止推理时动作突变导致翻车
-                prev_accel, prev_steer = getattr(self, "_infer_prev_control", (0.0, 0.0))
-                accel = np.clip(accel, prev_accel - 1.0, prev_accel + 1.0)      # max_accel_delta = 1.0
-                steer = np.clip(steer, prev_steer - 0.08, prev_steer + 0.08)  # max_steer_delta = 0.08
-                self._infer_prev_control = (float(accel), float(steer))
+            # 同样要复刻动作平滑限制，防止推理时动作突变导致翻车
+            prev_accel, prev_steer = getattr(self, "_ego_prev_control", (0.0, 0.0))
+            accel = np.clip(accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA)
+            steer = np.clip(steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA)
+            self._ego_prev_control = (float(accel), float(steer))
+            
+            self.egoState.speed = max(0.0, min(self.egoState.speed + float(accel) * self.dt, MAX_SPEED))
+            yaw_rate = (self.egoState.speed * math.tan(float(steer))) / WHEEL_BASE
+            self.egoState.heading = (self.egoState.heading + math.degrees(yaw_rate * self.dt)) % 360.0
+            h_rad = math.radians(self.egoState.heading)
+            self.egoState.x += self.egoState.speed * math.sin(h_rad) * self.dt
+            self.egoState.y += self.egoState.speed * math.cos(h_rad) * self.dt
+            vsMap[self.egoName] = self.egoState
+            
+        # 2. 控制所有背景车 (使用背景车专用模型)
+        for v in bgVehicles:
+            avName = self.tessAuto.tessngId2AvNameMap.get(v.id())
+            agent = self.bgAgents.get(avName)
+            if not agent or "state" not in agent:
+                continue
                 
-                accel = float(accel)
-                steer = float(steer)
-            else:
-                accel, steer = ACTION_TO_CONTROL[int(action)]
+            if hasattr(self, "bgModel") and self.bgModel is not None:
+                obs = self.buildObs(v, vehicles)
+                action, _ = self.bgModel.predict(obs, deterministic=True)
                 
-            # 更新 Ego 状态
-            dt = self.dt
-            self.egoState.speed += accel * dt
-            self.egoState.speed = max(0.0, min(self.egoState.speed, MAX_SPEED))
-            
-            yaw_rate = (self.egoState.speed * math.tan(steer)) / WHEEL_BASE
-            self.egoState.heading = (self.egoState.heading + math.degrees(yaw_rate * dt)) % 360.0
-            
-            heading_rad = math.radians(self.egoState.heading)
-            self.egoState.x += self.egoState.speed * math.sin(heading_rad) * dt
-            self.egoState.y += self.egoState.speed * math.cos(heading_rad) * dt
-            
-            self.currentControl = (accel, steer)
-            
-        vsMap = {self.egoName: self.egoState}
+                accel = np.clip(action[0], MAX_DECEL, MAX_ACCEL)
+                steer = np.clip(action[1], -MAX_STEER_ANGLE, MAX_STEER_ANGLE)
 
-        # 2. 控制背景车
-        USE_MODEL_FOR_BG = False  # 当前训练主车阶段，先不接入模型控制背景车
-        
-        all_bg_finished = True
-        if USE_MODEL_FOR_BG and getattr(self, "multiInfer", None) is not None:
-            results = self.multiInfer.stepAll(vehicles, p2m, dt=self.dt)
-            for name, s in results.items():
-                vsMap[name] = VehicleState(x=s["x"], y=s["y"], heading=s["heading"], speed=s["speed"])
-            all_bg_finished = self.multiInfer.allFinished
-        else:
-            for name, agent in self.bgAgents.items():
-                if agent["progress"] < agent["totalLength"]:
-                    all_bg_finished = False
-                    agent["progress"] += agent["speed"] * self.dt
-                    agent["progress"] = min(agent["progress"], agent["totalLength"])
-                    
-                x, y, heading = self._posOnPath(agent["smoothed"], agent["progress"])
-                agent["x"] = x
-                agent["y"] = y
-                agent["heading"] = heading
+                prev_accel, prev_steer = agent["prev_control"]
+                accel = np.clip(accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA)
+                steer = np.clip(steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA)
+                agent["prev_control"] = (float(accel), float(steer))
                 
-                vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+                st = agent["state"]
+                st.speed = max(0.0, min(st.speed + float(accel) * self.dt, MAX_SPEED))
+                yaw_rate = (st.speed * math.tan(float(steer))) / WHEEL_BASE
+                st.heading = (st.heading + math.degrees(yaw_rate * self.dt)) % 360.0
+                h_rad = math.radians(st.heading)
+                st.x += st.speed * math.sin(h_rad) * self.dt
+                st.y += st.speed * math.cos(h_rad) * self.dt
+                vsMap[avName] = st
 
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
@@ -573,7 +569,9 @@ class MySimulator(QObject, PyCustomerSimulator):
     # ============================================================
 
     def runTraining(self):
+        from Utils.Constant import EGO_MODEL_FILENAME, BG_MODEL_FILENAME
         os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+        # 训练模式下默认保存路径（当前正在训练的模型）
         savePath = os.path.join(MODEL_SAVE_DIR, "model")
 
         if TRAIN_MODE and self.scenarios:
@@ -640,18 +638,26 @@ class MySimulator(QObject, PyCustomerSimulator):
             print(f"\n[训练] 完成! 模型: {savePath}")
 
         elif not TRAIN_MODE:
-            print(f"[推理] 加载模型: {savePath}")
+            egoPath = os.path.join(MODEL_SAVE_DIR, EGO_MODEL_FILENAME)
+            bgPath = os.path.join(MODEL_SAVE_DIR, BG_MODEL_FILENAME)
+            
+            print(f"[推理] 加载 Ego 模型: {egoPath}")
+            print(f"[推理] 加载背景车模型: {bgPath}")
+            
             try:
-                if RL_ALGO == "PPO":
-                    from stable_baselines3 import PPO
-                    self.egoModel = PPO.load(savePath)
-                else:
-                    from stable_baselines3 import DQN
-                    self.egoModel = DQN.load(savePath)
-                print("[推理] Ego 模型加载成功。")
+                from stable_baselines3 import PPO, DQN
+                ModelClass = PPO if RL_ALGO == "PPO" else DQN
+                
+                if os.path.exists(egoPath):
+                    self.egoModel = ModelClass.load(egoPath)
+                    print("[推理] Ego 模型加载成功。")
+                
+                if os.path.exists(bgPath):
+                    self.bgModel = ModelClass.load(bgPath)
+                    print("[推理] 背景车模型加载成功。")
+                    
             except Exception as e:
                 print(f"[推理] 模型加载失败: {e}")
-                self.egoModel = None
         else:
             print("[训练] Data 目录无 JSON 文件")
             return
