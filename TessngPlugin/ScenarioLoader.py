@@ -126,7 +126,7 @@ class ScenarioLoader:
             vehicles[name] = {
                 "path": path,
                 "speed": speed,
-                "color": color
+                "color": color,
             }
 
         return {"vehicles": vehicles}

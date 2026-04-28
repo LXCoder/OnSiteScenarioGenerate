@@ -78,6 +78,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             scene_dir = os.path.join(DATA_DIR, "train")
         self.scenarioLoader = ScenarioLoader(scene_dir, FILTER_SCENES)
         self.scenarios = self.scenarioLoader.loadAll()
+        self.scenario_indices = [] # 用来存放洗牌后的索引队列
 
         # 当前场景
         self.currentScenarioIdx = 0
@@ -336,7 +337,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
             if v > 1.0:
                 # 离规划轨迹越近，奖励越高
-                r_center = 0.35 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset))
+                r_center = 0.35 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset)**2)
 
         # 4. 航向对齐奖励 (权重 0.30 - 高优先级)
         angle_diff = getattr(self, "_current_angle_diff", 0.0)
@@ -625,11 +626,16 @@ class MySimulator(QObject, PyCustomerSimulator):
                     tensorboard_log=TENSORBOARD_LOG
                 )
 
-            for i in range(numScenarios):
-                print(f"\n[训练] === 场景 {i}: {self.scenarios[i]['file']} ===")
-                self.switchScenario(i)
-                model.learn(total_timesteps=stepsPerScenario, reset_num_timesteps=False)
-
+            # for i in range(numScenarios):
+            #     print(f"\n[训练] === 场景 {i}: {self.scenarios[i]['file']} ===")
+            #     self.switchScenario(i)
+            #     total_timestaps = (
+            #         stepsPerScenario
+            #         if is_use_avg_ratio
+            #         else int(TOTAL_TIMESTEPS * self.scenario_ratios[i])
+            #     )
+            #     model.learn(total_timesteps=total_timestaps , reset_num_timesteps=False)
+            model.learn(total_timesteps=TOTAL_TIMESTEPS , reset_num_timesteps=False)
             model.save(savePath)
             print(f"\n[训练] 完成! 模型: {savePath}")
 
@@ -798,6 +804,16 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._current_lateral_dist = 0.0 # 清理横向偏差缓存
         self._current_angle_diff = 0.0 # 清理航向角偏差缓存
         self._ego_stuck_count = 0 # 清理卡死计数
+
+        if self.scenarios:
+            # 如果队列空了，重新装填并洗牌
+            if not self.scenario_indices:
+                self.scenario_indices = list(range(len(self.scenarios)))
+                np.random.shuffle(self.scenario_indices)  # 随机打乱顺序
+
+            # 从队列中取出一个场景索引
+            target_idx = self.scenario_indices.pop(0)
+            self.switchScenario(target_idx)
         
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
@@ -851,11 +867,11 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 2. 导航 (13维)
         if centerLine and len(centerLine) >= 2:
-            sparse = NavigationCalculator.sparsifyByDistance(centerLine, 5.0)
+            sparse = NavigationCalculator.sparsifyByDistance(centerLine, 3.0)
             vPos = vehicle.pos()
             navResult = NavigationCalculator.compute(
                 p2m(vPos.x()), p2m(vPos.y()), vehicle.angle(),
-                sparse, numCheckpoints=5,
+                sparse, numCheckpoints=4,
             )
             # [新增] 缓存归一化的曲率半径，供奖励函数计算动态限速
             self._current_curvature_radius = navResult.curvatureRadius 

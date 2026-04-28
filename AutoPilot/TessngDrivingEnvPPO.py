@@ -53,7 +53,7 @@ class TessngDrivingEnvPPO(gym.Env):
 
         # 控制变化率限制（非常关键）
         self._max_accel_delta = 1.0     # m/s² per step
-        self._max_steer_delta = 0.08    # rad per step
+        self._max_steer_delta = 0.05    # rad per step
 
         # ===== 线程同步 =====
         self._actionReady = threading.Event()
