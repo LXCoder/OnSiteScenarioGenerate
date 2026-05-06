@@ -8,7 +8,7 @@ MAX_STEER_DELTA = 0.05
 MAX_ACC_DELTA = 1.0
 
 # ===== 配置 =====
-TRAIN_MODE = True
+TRAIN_MODE = False
 TOTAL_TIMESTEPS = 4000000
 # DATA_DIR = "Data/prod"
 DATA_DIR = "Data"
@@ -26,7 +26,7 @@ WHEEL_BASE = 2.8  # 轴距
 # 选择强化学习算法: "DQN" 或 "PPO"
 RL_ALGO = "PPO"
 MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
-EGO_MODEL_FILENAME = "model.zip.v8"
+EGO_MODEL_FILENAME = "model.zip"
 BG_MODEL_FILENAME = "model.zip.v6"
 TENSORBOARD_LOG = "./Log/"
 TRAIN_MAX_STEPS = 1000
@@ -35,3 +35,6 @@ TRAIN_MAX_STEPS = 1000
 USE_TEST_LOGIC = True
 # 设定open scenario的起始时间阈值（秒）
 START_TIME_THRESHOLD = 1.0
+
+# 是否单一场景重复执行
+REPEAT_SINGLE_SCENARIO = False

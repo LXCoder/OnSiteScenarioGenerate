@@ -17,7 +17,7 @@ import os
 import threading
 import numpy as np
 
-from PySide2.QtCore import QObject
+from PySide2.QtCore import QObject, Signal
 
 from Tessng import (
     PyCustomerSimulator,
@@ -52,11 +52,13 @@ from Utils.Constant import (
     TENSORBOARD_LOG,
     TRAIN_MAX_STEPS,
     MAX_ACC_DELTA,
-    MAX_STEER_DELTA
+    MAX_STEER_DELTA,
+    REPEAT_SINGLE_SCENARIO
 )
 
 
 class MySimulator(QObject, PyCustomerSimulator):
+    sig_stop_simu = Signal()
     def __init__(self):
         super().__init__()
         PyCustomerSimulator.__init__(self)
@@ -68,6 +70,8 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         iface = tessngIFace()
         self.tessAuto = TessAutoPyInterface(iface)
+
+        self.sig_stop_simu.connect(iface.simuInterface().stopSimu)
 
         # ===== 主车：由选手的 TestPlayer 控制 =====
         self.playerManager = PlayerManager()
@@ -172,6 +176,12 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 训练模式（env 未关闭时才走训练逻辑）
         if not self.env._closed:
             self._afterOneStepTraining(vehicles)
+
+    def afterStop(self):
+        print("[MySimulator] 仿真结束")
+
+    def afterPause(self):
+        print("[MySimulator] 仿真暂停")
 
     # ============================================================
     #  主车更新
@@ -569,8 +579,13 @@ class MySimulator(QObject, PyCustomerSimulator):
             
             print(f"[推理] {reason}，重置环境。")
             self._inferCreated = False
-            if getattr(self, "multiInfer", None):
-                self.multiInfer.resetAll()
+            
+            if REPEAT_SINGLE_SCENARIO:
+                if getattr(self, "multiInfer", None):
+                    self.multiInfer.resetAll()
+            else:
+                self.doReset()
+                print("[推理] 回合结束，自动切换到下一个场景...")
 
     # ============================================================
     #  训练线程
@@ -635,11 +650,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             # for i in range(numScenarios):
             #     print(f"\n[训练] === 场景 {i}: {self.scenarios[i]['file']} ===")
             #     self.switchScenario(i)
-            #     total_timestaps = (
-            #         stepsPerScenario
-            #         if is_use_avg_ratio
-            #         else int(TOTAL_TIMESTEPS * self.scenario_ratios[i])
-            #     )
+            #     total_timestaps = TOTAL_TIMESTEPS * ratio[i]
             #     model.learn(total_timesteps=total_timestaps , reset_num_timesteps=False)
             model.learn(total_timesteps=TOTAL_TIMESTEPS , reset_num_timesteps=False)
             model.save(savePath)
@@ -819,15 +830,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._current_angle_diff = 0.0 # 清理航向角偏差缓存
         self._ego_stuck_count = 0 # 清理卡死计数
 
-        if self.scenarios:
-            # 如果队列空了，重新装填并洗牌
-            if not self.scenario_indices:
-                self.scenario_indices = list(range(len(self.scenarios)))
-                np.random.shuffle(self.scenario_indices)  # 随机打乱顺序
-
-            # 从队列中取出一个场景索引
-            target_idx = self.scenario_indices.pop(0)
-            self.switchScenario(target_idx)
+        # 切换场景
+        self._doSwitchScenario()
         
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
@@ -839,6 +843,30 @@ class MySimulator(QObject, PyCustomerSimulator):
             
         self.isFirstStep = True
         print(f"\n[Reset] Ego 状态已重置，开始新的 Episode。")
+
+    def _doSwitchScenario(self):
+        if not self.scenarios:
+            return
+        if TRAIN_MODE:
+            # 如果队列空了，重新装填并洗牌
+            if not self.scenario_indices:
+                self.scenario_indices = list(range(len(self.scenarios)))
+                np.random.shuffle(self.scenario_indices)  # 随机打乱顺序
+
+            # 从队列中取出一个场景索引
+            target_idx = self.scenario_indices.pop(0)
+            self.switchScenario(target_idx)
+        else:
+            # 推理模式按顺序切换
+            next_idx = self.currentScenarioIdx + 1
+            if next_idx >= len(self.scenarios):
+                # 结束仿真
+                if self.iface.simuInterface().isRunning():
+                    print("[推理] 已完成所有场景的推理，仿真结束")
+                    self.sig_stop_simu.emit()
+
+            self.switchScenario(next_idx)
+            self.currentScenarioIdx = next_idx
 
     def buildInitialObs(self):
         return np.zeros(94, dtype=np.float32)
