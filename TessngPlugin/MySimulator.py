@@ -113,6 +113,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 状态
         self.isFirstStep = True
         self.currentControl = (0.0, 0.0)
+        self.currentEgoControl = (0.0, 0.0)
+
         self.trainThread = None
         self.stepCount = 0
         self.episodeReward = 0.0
@@ -231,7 +233,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             initial_speed = getattr(self, "_ego_target_speed", 15.0)
             self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=initial_speed)
         
-        accel, steer = self.currentControl
+        accel, steer = self.currentEgoControl
         
         # 运动学模型更新
         dt = self.dt
@@ -258,7 +260,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             control = self.env.onFirstStep()
             self.isFirstStep = False
             if control is not None:
-                self.currentControl = control
+                self.currentEgoControl = control
                 self.createBgVehicles() # 背景车作为障碍物
             return
 
@@ -284,8 +286,9 @@ class MySimulator(QObject, PyCustomerSimulator):
         # print(f"ego heading: {ego_heading:.2f}, expected heading: {expected_heading:.2f}, diff: {diff:.2f}")
         self._current_angle_diff = 0.0 if self.isFirstStep else diff
 
-        # 构建以 Ego 为中心的观测
-        obs = self.buildObs(egoVehicle, vehicles)
+        # 构建以 Ego 为中心的观测，并显式同步 Ego 观测派生状态
+        obs, obs_info = self.buildObs(egoVehicle, vehicles)
+        self.applyEgoObsInfo(obs_info)
         # 计算 Ego 的奖励
         reward = self.computeEgoReward(egoVehicle)
         done = self.checkEgoDone(egoVehicle)
@@ -300,7 +303,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.isFirstStep = True
             return
 
-        self.currentControl = control
+        self.currentEgoControl = control
         # 背景车在此模式下可以作为 NPC 运行
         self.applyBgActions((0.0, 0.0)) # 背景车恒速或静止
 
@@ -486,7 +489,8 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 1. 控制 Ego (使用模型)
         if hasattr(self, "egoModel") and self.egoModel is not None:
-            obs = self.buildObs(egoVehicle, vehicles)
+            obs, obs_info = self.buildObs(egoVehicle, vehicles)
+            self.applyEgoObsInfo(obs_info)
             action, _ = self.egoModel.predict(obs, deterministic=True)
             
             # 直接读取物理动作值并截断
@@ -498,6 +502,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             accel = np.clip(accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA)
             steer = np.clip(steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA)
             self._ego_prev_control = (float(accel), float(steer))
+            self.currentEgoControl = self._ego_prev_control
             
             self.egoState.speed = max(0.0, min(self.egoState.speed + float(accel) * self.dt, MAX_SPEED))
             yaw_rate = (self.egoState.speed * math.tan(float(steer))) / WHEEL_BASE
@@ -515,7 +520,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 continue
                 
             if hasattr(self, "bgModel") and self.bgModel is not None:
-                obs = self.buildObs(v, vehicles)
+                obs, _ = self.buildObs(v, vehicles)
                 action, _ = self.bgModel.predict(obs, deterministic=True)
                 
                 accel = np.clip(action[0], MAX_DECEL, MAX_ACCEL)
@@ -875,19 +880,28 @@ class MySimulator(QObject, PyCustomerSimulator):
     #  观测（根据主体车辆计算）
     # ============================================================
 
-    def buildObs(self, vehicle, vehicles) -> np.ndarray:
+    def buildObs(self, vehicle, vehicles):
         obs = np.zeros(94, dtype=np.float32)
+        obs_info = {
+            "curvature_radius": None,
+            "current_steer": 0.0,
+        }
         
         # 判断是 Ego 还是背景车，选择对应的路径
         egoTessngId = self.tessAuto.avName2TessngIdMap.get(self.egoName)
-        if vehicle.id() == egoTessngId:
+        is_ego = vehicle.id() == egoTessngId
+        if is_ego:
             centerLine = self.egoSmoothedPath
             v_speed = self.egoState.speed if self.egoState else vehicle.currSpeed()
+            control = getattr(self, "currentEgoControl", (0.0, 0.0))
+            prev_steer = self.prevSteer
         else:
             avName = self.tessAuto.tessngId2AvNameMap.get(vehicle.id())
             agent = self.bgAgents.get(avName)
             centerLine = agent["smoothed"] if agent else []
             v_speed = agent["speed"] if agent else vehicle.currSpeed()
+            control = agent.get("prev_control", (0.0, 0.0)) if agent else (0.0, 0.0)
+            prev_steer = control[1]
 
         # 1. 基础状态 (5维 + 运动学)
         laneResult = LaneProjector.fromTessngVehicle(vehicle, p2m)
@@ -898,10 +912,11 @@ class MySimulator(QObject, PyCustomerSimulator):
             obs[3] = laneResult.angle_diff
 
         obs[4] = np.clip(v_speed / MAX_SPEED, 0, 1)
-        obs[5] = np.clip((self.currentControl[1] / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
-        obs[6] = np.clip((self.currentControl[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1)
-        obs[7] = np.clip((self.prevSteer / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
-        self.prevSteer = self.currentControl[1]
+        obs[5] = np.clip((control[1] / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
+        obs[6] = np.clip((control[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1)
+        obs[7] = np.clip((prev_steer / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
+        
+        obs_info["current_steer"] = float(control[1])
 
         MAX_YAW_RATE = 1.0
         yawRate = self.yawRateCalc.update(vehicle.id(), vehicle.angle(), self.dt)
@@ -916,7 +931,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 sparse, numCheckpoints=4,
             )
             # [新增] 缓存归一化的曲率半径，供奖励函数计算动态限速
-            self._current_curvature_radius = navResult.curvatureRadius 
+            obs_info["curvature_radius"] = navResult.curvatureRadius
             
             for i in range(min(5, len(navResult.forwardGaps))):
                 obs[9 + i * 2] = navResult.forwardGaps[i]
@@ -932,7 +947,14 @@ class MySimulator(QObject, PyCustomerSimulator):
         for i, r in enumerate(surroundResult.radar):
             obs[22 + i] = r
 
-        return obs
+        return obs, obs_info
+
+    def applyEgoObsInfo(self, obs_info):
+        """Apply Ego-only observation side effects after building an observation."""
+        self.prevSteer = obs_info.get("current_steer", self.prevSteer)
+        curvature_radius = obs_info.get("curvature_radius")
+        if curvature_radius is not None:
+            self._current_curvature_radius = curvature_radius
 
     # ============================================================
     #  奖励（背景车视角，鼓励干扰主车）
@@ -1375,4 +1397,3 @@ class MySimulator(QObject, PyCustomerSimulator):
         dy = by - ay
         heading = math.degrees(math.atan2(dx, dy)) % 360.0
         return bx, by, heading
-
