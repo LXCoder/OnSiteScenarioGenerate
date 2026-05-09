@@ -54,12 +54,13 @@ from Utils.Constant import (
     TRAIN_MAX_STEPS,
     MAX_ACC_DELTA,
     MAX_STEER_DELTA,
-    REPEAT_SINGLE_SCENARIO
+    REPEAT_SINGLE_SCENARIO,
 )
 
 
 class MySimulator(QObject, PyCustomerSimulator):
     sig_stop_simu = Signal()
+
     def __init__(self):
         super().__init__()
         PyCustomerSimulator.__init__(self)
@@ -77,7 +78,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # ===== 主车：由选手的 TestPlayer 控制 =====
         self.playerManager = PlayerManager()
         self.egoName = "ego"
-        self.egoSmoothedPath = [] # 初始化为空，切换场景时动态加载
+        self.egoSmoothedPath = []  # 初始化为空，切换场景时动态加载
 
         # ===== 背景车：从 Data 目录 JSON 加载，由 DQN 控制 =====
         scene_dir = os.path.join(DATA_DIR, "test")
@@ -85,7 +86,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             scene_dir = os.path.join(DATA_DIR, "train")
         self.scenarioLoader = ScenarioLoader(scene_dir, FILTER_SCENES)
         self.scenarios = self.scenarioLoader.loadAll()
-        self.scenario_indices = [] # 用来存放洗牌后的索引队列
+        self.scenario_indices = []  # 用来存放洗牌后的索引队列
 
         # 当前场景
         self.currentScenarioIdx = 0
@@ -126,7 +127,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.stepCount = 0
         self.episodeReward = 0.0
         self.episodeCount = 0
-        
+
         # 多模型配置
         self.egoModel = None
         self.bgModel = None
@@ -219,9 +220,13 @@ class MySimulator(QObject, PyCustomerSimulator):
         """根据 RL 输出的 currentControl (accel, steer) 更新 egoState"""
         if self.egoState is None:
             # 初始状态
-            init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.047, -287.819)
+            init_x, init_y = (
+                self.egoSmoothedPath[0]
+                if self.egoSmoothedPath
+                else (-650.047, -287.819)
+            )
             _, _, init_heading_math = self._posOnPath(self.egoSmoothedPath, 0.0)
-            
+
             # _posOnPath 返回的是基于数学坐标 (Y向北) 的 atan2(dx, dy) 角度
             # 我们需要将其转换为 TESSNG 坐标系 (Y向南，北0顺时针) 下的航向角
             # 转换公式：从逆时针转顺时针，需从360减去，加上对齐偏差
@@ -233,27 +238,33 @@ class MySimulator(QObject, PyCustomerSimulator):
                 init_heading = math.degrees(math.atan2(dx, dy)) % 360.0
             else:
                 init_heading = 0.0
-                
-            print(f"初始位置: ({init_x:.2f}, {init_y:.2f}), 初始航向: {init_heading:.2f}°")
-                
+
+            print(
+                f"初始位置: ({init_x:.2f}, {init_y:.2f}), 初始航向: {init_heading:.2f}°"
+            )
+
             # init_y 已经是数学坐标，直接赋值
             initial_speed = getattr(self, "_ego_target_speed", 15.0)
-            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=initial_speed)
-        
+            self.egoState = VehicleState(
+                x=init_x, y=init_y, heading=init_heading, speed=initial_speed
+            )
+
         accel, steer = self.currentEgoControl
-        
+
         # 运动学模型更新
         dt = self.dt
         self.egoState.speed += accel * dt
         self.egoState.speed = max(0.0, min(self.egoState.speed, MAX_SPEED))
-        
+
         yaw_rate = (self.egoState.speed * math.tan(steer)) / WHEEL_BASE
-        self.egoState.heading = (self.egoState.heading + math.degrees(yaw_rate * dt)) % 360.0
-        
+        self.egoState.heading = (
+            self.egoState.heading + math.degrees(yaw_rate * dt)
+        ) % 360.0
+
         heading_rad = math.radians(self.egoState.heading)
         self.egoState.x += self.egoState.speed * math.sin(heading_rad) * dt
         # 关键修正：在数学坐标系中，向北(heading=0)为 Y 增加
-        self.egoState.y += self.egoState.speed * math.cos(heading_rad) * dt 
+        self.egoState.y += self.egoState.speed * math.cos(heading_rad) * dt
 
         vsMap = {self.egoName: self.egoState}
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
@@ -268,7 +279,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.isFirstStep = False
             if control is not None:
                 self.currentEgoControl = control
-                self.createBgVehicles() # 背景车作为障碍物
+                self.createBgVehicles()  # 背景车作为障碍物
             return
 
         egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
@@ -277,19 +288,22 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
 
         self.stepCount += 1
-        
+
         # 集中计算一次 Frenet 进度，供 Reward 和 Done 共用
-        self._current_s_ego, self._current_s_total, self._current_lateral_dist, expected_heading = self._getFrenetProgress(
-            self.egoSmoothedPath, 
-            p2m(egoVehicle.pos().x()), 
-            -p2m(egoVehicle.pos().y())
+        (
+            self._current_s_ego,
+            self._current_s_total,
+            self._current_lateral_dist,
+            expected_heading,
+        ) = self._getFrenetProgress(
+            self.egoSmoothedPath, p2m(egoVehicle.pos().x()), -p2m(egoVehicle.pos().y())
         )
-        
+
         # 计算并保存航向角最小绝对偏差 [0, 180]
         ego_heading = self.egoState.heading if self.egoState else egoVehicle.angle()
         raw_diff = abs(ego_heading - expected_heading) % 360.0
         diff = 360.0 - raw_diff if raw_diff > 180.0 else raw_diff
-        
+
         # print(f"ego heading: {ego_heading:.2f}, expected heading: {expected_heading:.2f}, diff: {diff:.2f}")
         self._current_angle_diff = 0.0 if self.isFirstStep else diff
 
@@ -305,14 +319,16 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         if control is None:
             self.episodeCount += 1
-            print(f"[Episode {self.episodeCount}] Ego训练: 步数={self.stepCount}, 奖励={self.episodeReward:.2f}")
+            print(
+                f"[Episode {self.episodeCount}] Ego训练: 步数={self.stepCount}, 奖励={self.episodeReward:.2f}"
+            )
             self.episodeReward = 0.0
             self.isFirstStep = True
             return
 
         self.currentEgoControl = control
         # 背景车在此模式下可以作为 NPC 运行
-        self.applyBgActions((0.0, 0.0)) # 背景车恒速或静止
+        self.applyBgActions((0.0, 0.0))  # 背景车恒速或静止
 
     def computeEgoReward(self, egoVehicle) -> float:
         """
@@ -332,24 +348,24 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 2. 动态速度奖励 (权重 0.05 - 极低优先级)
         # 获取场景配置的基础目标速度
         base_target_v = getattr(self, "_ego_target_speed", 15.0)
-        
+
         # [新增] 动态限速逻辑：根据弯道曲率半径下调期望速度
         # self._current_curvature_radius 是 [0, 1] 归一化的值，对应 [0, 1000m]
         norm_radius = getattr(self, "_current_curvature_radius", 1.0)
         real_radius = norm_radius * 1000.0
-        
+
         # 物理公式：v_max = sqrt(a_lat * R)。假设舒适侧向加速度为 2.5 m/s^2
         curve_limit_v = math.sqrt(2.5 * max(5.0, real_radius))
-        
+
         # 最终期望速度是场景配置与弯道物理限速的最小值
         dynamic_target_v = min(base_target_v, curve_limit_v)
-        
+
         v = egoVehicle.currSpeed()
         speed_diff = abs(v - dynamic_target_v)
-        
+
         # 速度奖励降低权重至 0.05
         # r_speed = 0.05 * max(0.0, (1.0 - speed_diff / 10.0))
-        
+
         # 3. 轨迹居中奖励 (权重 0.35 - 最高物理权重)
         r_center = 0.0
         # 从缓存中获取由 _getFrenetProgress 计算的车辆到参考路径的横向偏差
@@ -363,46 +379,47 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 必须车辆有速度才给居中奖励，防止原地趴窝白嫖
             if v > 1.0:
                 # 离规划轨迹越近，奖励越高
-                r_center = 0.35 * max(0.0, (1.0 - lateral_offset / max_tolerate_offset)**2)
+                r_center = 0.35 * max(
+                    0.0, (1.0 - lateral_offset / max_tolerate_offset) ** 2
+                )
 
         # 4. 航向对齐奖励 (权重 0.30 - 高优先级)
         angle_diff = getattr(self, "_current_angle_diff", 0.0)
         r_heading = 0.0
         if angle_diff > 45.0:
-            self._is_out_of_bounds = True # 航向偏差过大也算出界
+            self._is_out_of_bounds = True  # 航向偏差过大也算出界
         else:
             if v > 1.0:
                 # 航向角奖励增加权重至 0.30
                 r_heading = 0.30 * max(0.0, (1.0 - angle_diff / 45.0))
-            
+
         # 5. 单步实际推进量奖励 (Delta Progress, 权重 0.20)
         # 直接使用已计算的缓存值
         s_ego = getattr(self, "_current_s_ego", 0.0)
-        
+
         # 获取上一帧的 s_ego (若无则默认为当前值)
         prev_s_ego = getattr(self, "_prev_s_ego", s_ego)
-        
+
         # 计算本帧在路径上实际前进了多少米
         delta_s = s_ego - prev_s_ego
-        
+
         # 更新缓存以备下一帧使用
         self._prev_s_ego = s_ego
-        
+
         r_progress = 0.0
         if delta_s > 0.0:
             # 每帧理论最大 delta_s 为 2.0 米，权重 0.30
             r_progress = 0.35 * np.clip(delta_s / 2.0, 0.0, 1.0)
-            
+
         # 6. 计算单步总奖励 [0.0, 1.0]
         # total_reward = r_speed + r_center + r_heading + r_progress
-        total_reward =  r_center + r_heading + r_progress
+        total_reward = r_center + r_heading + r_progress
 
-        
         # 7. 终点大奖 (全局最高优先级)
         if getattr(self, "_is_reached_goal", False):
-            total_reward += 10.0 # 给予强力正向引导
+            total_reward += 10.0  # 给予强力正向引导
             print("  --> 获得终点大奖! (+10.0)")
-            
+
         return float(total_reward)
 
     def checkEgoDone(self, egoVehicle) -> bool:
@@ -412,29 +429,29 @@ class MySimulator(QObject, PyCustomerSimulator):
         if getattr(self, "_is_out_of_bounds", False):
             print("[Done] Ego 偏离车道!")
             return True
-            
+
         # [新增] 低速卡死判定：防止在弯道极速龟爬苟活
         v = egoVehicle.currSpeed()
         if v < 1.0:
             self._ego_stuck_count = getattr(self, "_ego_stuck_count", 0) + 1
         else:
             self._ego_stuck_count = 0
-            
+
         if getattr(self, "_ego_stuck_count", 0) > 50:
             print("[Done] Ego 陷入低速卡死状态!")
             return True
-            
+
         # [新增] Frenet 纵向距离判定
         # 直接使用已计算的缓存值
         s_ego = getattr(self, "_current_s_ego", 0.0)
         s_total = getattr(self, "_current_s_total", 0.0)
         dist_to_end = s_total - s_ego
-        
+
         if s_total > 0.0 and dist_to_end < 5.0:
             print(f"[Done] Ego 成功到达终点! (剩余距离: {dist_to_end:.2f}m)")
             self._is_reached_goal = True
             return True
-            
+
         # 取消最大步数限制，由目标到达、碰撞、出界或卡死来决定结束
         # if self.stepCount >= TRAIN_MAX_STEPS:
         #     print("[Done] 达到最大步数")
@@ -445,8 +462,16 @@ class MySimulator(QObject, PyCustomerSimulator):
         p1 = v1.pos()
         p2 = v2.pos()
         return self._check_bbox_collision(
-            p2m(p1.x()), p2m(p1.y()), v1.angle(), v1.length(), v1.width(),
-            p2m(p2.x()), p2m(p2.y()), v2.angle(), v2.length(), v2.width()
+            p2m(p1.x()),
+            p2m(p1.y()),
+            v1.angle(),
+            v1.length(),
+            v1.width(),
+            p2m(p2.x()),
+            p2m(p2.y()),
+            v2.angle(),
+            v2.length(),
+            v2.width(),
         )
 
     # ============================================================
@@ -456,12 +481,16 @@ class MySimulator(QObject, PyCustomerSimulator):
     def _afterOneStepInference(self, vehicles):
         if not getattr(self, "_inferCreated", False):
             # 初始化 Ego 状态
-            init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
+            init_x, init_y = (
+                self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
+            )
             _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
             initial_speed = getattr(self, "_ego_target_speed", 15.0)
-            self.egoState = VehicleState(x=init_x, y=init_y, heading=init_heading, speed=initial_speed)
+            self.egoState = VehicleState(
+                x=init_x, y=init_y, heading=init_heading, speed=initial_speed
+            )
             self._ego_prev_control = (0.0, 0.0)
-            
+
             vsMap = {self.egoName: self.egoState}
             # 初始化背景车状态
             for name, agent in self.bgAgents.items():
@@ -470,7 +499,9 @@ class MySimulator(QObject, PyCustomerSimulator):
                     continue
 
                 x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
-                agent["state"] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
+                agent["state"] = VehicleState(
+                    x=x, y=y, heading=heading, speed=agent["speed"]
+                )
                 agent["prev_control"] = (0.0, 0.0)
                 vsMap[name] = agent["state"]
 
@@ -488,60 +519,74 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         egoVehicle.setColor("#02f13e")
         # 集中计算一次 Ego 的 Frenet 进度（用于终止判断）
-        self._current_s_ego, self._current_s_total, self._current_lateral_dist, _ = self._getFrenetProgress(
-            self.egoSmoothedPath, 
-            p2m(egoVehicle.pos().x()), 
-            -p2m(egoVehicle.pos().y())
+        self._current_s_ego, self._current_s_total, self._current_lateral_dist, _ = (
+            self._getFrenetProgress(
+                self.egoSmoothedPath,
+                p2m(egoVehicle.pos().x()),
+                -p2m(egoVehicle.pos().y()),
+            )
         )
 
         vsMap = {}
-        
-        is_debug_info =  self._inferStep % 100 == 0
+
+        is_debug_info = self._inferStep % 100 == 0
 
         # 1. 控制 Ego (使用模型)
         if hasattr(self, "egoModel") and self.egoModel is not None:
             obs, obs_info = self.buildObs(egoVehicle, vehicles)
             self.applyEgoObsInfo(obs_info)
             action, _ = self.egoModel.predict(obs, deterministic=True)
-            
+
             # 直接读取物理动作值并截断
             accel = np.clip(action[0], MAX_DECEL, MAX_ACCEL)
             steer = np.clip(action[1], -MAX_STEER_ANGLE, MAX_STEER_ANGLE)
 
             # 同样要复刻动作平滑限制，防止推理时动作突变导致翻车
             prev_accel, prev_steer = getattr(self, "_ego_prev_control", (0.0, 0.0))
-            accel = np.clip(accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA)
-            steer = np.clip(steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA)
+            accel = np.clip(
+                accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA
+            )
+            steer = np.clip(
+                steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA
+            )
             self._ego_prev_control = (float(accel), float(steer))
             self.currentEgoControl = self._ego_prev_control
-            
-            self.egoState.speed = max(0.0, min(self.egoState.speed + float(accel) * self.dt, MAX_SPEED))
+
+            self.egoState.speed = max(
+                0.0, min(self.egoState.speed + float(accel) * self.dt, MAX_SPEED)
+            )
             yaw_rate = (self.egoState.speed * math.tan(float(steer))) / WHEEL_BASE
-            self.egoState.heading = (self.egoState.heading + math.degrees(yaw_rate * self.dt)) % 360.0
+            self.egoState.heading = (
+                self.egoState.heading + math.degrees(yaw_rate * self.dt)
+            ) % 360.0
             h_rad = math.radians(self.egoState.heading)
             self.egoState.x += self.egoState.speed * math.sin(h_rad) * self.dt
             self.egoState.y += self.egoState.speed * math.cos(h_rad) * self.dt
             vsMap[self.egoName] = self.egoState
-            
+
         # 2. 控制所有背景车 (使用背景车专用模型)
         for v in bgVehicles:
             avName = self.tessAuto.tessngId2AvNameMap.get(v.id())
             agent = self.bgAgents.get(avName)
             if not agent or "state" not in agent:
                 continue
-                
+
             if hasattr(self, "bgModel") and self.bgModel is not None:
                 obs, _ = self.buildObs(v, vehicles)
                 action, _ = self.bgModel.predict(obs, deterministic=True)
-                
+
                 accel = np.clip(action[0], MAX_DECEL, MAX_ACCEL)
                 steer = np.clip(action[1], -MAX_STEER_ANGLE, MAX_STEER_ANGLE)
 
                 prev_accel, prev_steer = agent["prev_control"]
-                accel = np.clip(accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA)
-                steer = np.clip(steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA)
+                accel = np.clip(
+                    accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA
+                )
+                steer = np.clip(
+                    steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA
+                )
                 agent["prev_control"] = (float(accel), float(steer))
-                
+
                 st = agent["state"]
                 st.speed = max(0.0, min(st.speed + float(accel) * self.dt, MAX_SPEED))
                 yaw_rate = (st.speed * math.tan(float(steer))) / WHEEL_BASE
@@ -571,16 +616,18 @@ class MySimulator(QObject, PyCustomerSimulator):
                 if self._check_bbox_collision_vehi(egoVehicle, v):
                     self._is_collision = True
                     break
-        
+
         # 终止与重置判断
         is_reached_goal = False
         s_ego = getattr(self, "_current_s_ego", 0.0)
         s_total = getattr(self, "_current_s_total", 0.0)
         if s_total > 0.0 and (s_total - s_ego) < 5.0:
             is_reached_goal = True
-        
+
         is_out_of_bounds = False
-        if abs(getattr(self, "_current_lateral_dist", 0.0)) > (MAX_LANE_WIDTH / 2.0 + 0.5):
+        if abs(getattr(self, "_current_lateral_dist", 0.0)) > (
+            MAX_LANE_WIDTH / 2.0 + 0.5
+        ):
             is_out_of_bounds = True
 
         if self._is_collision or is_reached_goal or is_out_of_bounds:
@@ -592,10 +639,10 @@ class MySimulator(QObject, PyCustomerSimulator):
                 reason = "偏离车道"
             else:
                 reason = "达到最大步数"
-            
+
             print(f"[推理] {reason}，重置环境。")
             self._inferCreated = False
-            
+
             if REPEAT_SINGLE_SCENARIO:
                 self.clearTessngBgVehicles()
                 if getattr(self, "multiInfer", None):
@@ -610,6 +657,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def runTraining(self):
         from Utils.Constant import EGO_MODEL_FILENAME, BG_MODEL_FILENAME
+
         os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
         # 训练模式下默认保存路径（当前正在训练的模型）
         savePath = os.path.join(MODEL_SAVE_DIR, "model")
@@ -627,7 +675,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             if RL_ALGO == "PPO":
                 from stable_baselines3 import PPO
-                from datetime import datetime   
+                from datetime import datetime
 
                 model = PPO(
                     "MlpPolicy",
@@ -643,7 +691,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     ent_coef=0.03,
                     gae_lambda=0.95,
                     verbose=1,
-                    tensorboard_log=f"{TENSORBOARD_LOG}/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    tensorboard_log=f"{TENSORBOARD_LOG}/{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                 )
             else:
                 from stable_baselines3 import DQN
@@ -661,7 +709,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     gradient_steps=1,
                     target_update_interval=50,
                     verbose=1,
-                    tensorboard_log=TENSORBOARD_LOG
+                    tensorboard_log=TENSORBOARD_LOG,
                 )
 
             # for i in range(numScenarios):
@@ -669,29 +717,30 @@ class MySimulator(QObject, PyCustomerSimulator):
             #     self.switchScenario(i)
             #     total_timestaps = TOTAL_TIMESTEPS * ratio[i]
             #     model.learn(total_timesteps=total_timestaps , reset_num_timesteps=False)
-            model.learn(total_timesteps=TOTAL_TIMESTEPS , reset_num_timesteps=False)
+            model.learn(total_timesteps=TOTAL_TIMESTEPS, reset_num_timesteps=False)
             model.save(savePath)
             print(f"\n[训练] 完成! 模型: {savePath}")
 
         elif not TRAIN_MODE:
             egoPath = os.path.join(MODEL_SAVE_DIR, EGO_MODEL_FILENAME)
             bgPath = os.path.join(MODEL_SAVE_DIR, BG_MODEL_FILENAME)
-            
+
             print(f"[推理] 加载 Ego 模型: {egoPath}")
             print(f"[推理] 加载背景车模型: {bgPath}")
-            
+
             try:
                 from stable_baselines3 import PPO, DQN
+
                 ModelClass = PPO if RL_ALGO == "PPO" else DQN
-                
+
                 if os.path.exists(egoPath):
                     self.egoModel = ModelClass.load(egoPath)
                     print("[推理] Ego 模型加载成功。")
-                
+
                 if os.path.exists(bgPath):
                     self.bgModel = ModelClass.load(bgPath)
                     print("[推理] 背景车模型加载成功。")
-                    
+
             except Exception as e:
                 print(f"[推理] 模型加载失败: {e}")
         else:
@@ -703,6 +752,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 等一小会让 afterOneStep 从阻塞中退出
         import time
+
         time.sleep(0.5)
 
         # 推理模式
@@ -713,7 +763,10 @@ class MySimulator(QObject, PyCustomerSimulator):
                 prefix = scenario["file"].replace(".json", "")
                 for name, info in scenario["vehicles"].items():
                     self.multiInfer.addVehicle(
-                        f"{prefix}_{name}", info["path"], info["speed"], color=info["color"]
+                        f"{prefix}_{name}",
+                        info["path"],
+                        info["speed"],
+                        color=info["color"],
                     )
 
             self._inferCreated = False
@@ -731,7 +784,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
         self.currentScenarioIdx = idx
         self.currentVehicles = self.scenarios[idx]["vehicles"]
-        self.egoName = "ego" # 切换场景前重置默认 Ego 名称
+        self.egoName = "ego"  # 切换场景前重置默认 Ego 名称
         self.initBgAgents()
 
     def switchScenario(self, idx):
@@ -740,38 +793,48 @@ class MySimulator(QObject, PyCustomerSimulator):
     def initBgAgents(self):
         """初始化背景车运行状态，并加载当前场景的 Ego 参考路径"""
         self.bgAgents = {}
-        
+
         # 1. 尝试从场景中提取 Ego 路径
         ego_info = self.currentVehicles.get(self.egoName)
-        
+
         if ego_info is None and len(self.currentVehicles) > 0:
-            print(f"[警告] 当前场景 {self.scenarios[self.currentScenarioIdx]['file']} 缺少名为 '{self.egoName}' 的车辆定义！")
+            print(
+                f"[警告] 当前场景 {self.scenarios[self.currentScenarioIdx]['file']} 缺少名为 '{self.egoName}' 的车辆定义！"
+            )
             # 临时补救：以第一个车辆的路径作为 Ego 路径，并在背景车中忽略它
             fallback_name = list(self.currentVehicles.keys())[0]
             print(f"[警告] 退路策略：将使用 '{fallback_name}' 的路径作为 Ego 路径。")
             ego_info = self.currentVehicles[fallback_name]
             self.egoName = fallback_name  # 同步更改名字，防止被当成背景车
-            
+
         if ego_info:
             # 核心修正：参考路径统一转为数学坐标 (Y取反)
             gui_smoothed = MultiVehicleInference._smoothPath(ego_info["path"], 1.0)
             self.egoSmoothedPath = [(p[0], -p[1]) for p in gui_smoothed]
-            
+
             # 记录当前场景下 Ego 的期望速度
             self._ego_target_speed = ego_info.get("speed", 15.0)
-            
+
             # 如果初始状态存在，修正它的值
             if self.egoState:
-                init_x, init_y = self.egoSmoothedPath[0] if self.egoSmoothedPath else (-650.0, -287.0)
+                init_x, init_y = (
+                    self.egoSmoothedPath[0]
+                    if self.egoSmoothedPath
+                    else (-650.0, -287.0)
+                )
                 _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
-                self.egoState.x, self.egoState.y, self.egoState.heading = init_x, init_y, init_heading
-                self.egoState.speed = self._ego_target_speed # 初始速度对齐期望速度
+                self.egoState.x, self.egoState.y, self.egoState.heading = (
+                    init_x,
+                    init_y,
+                    init_heading,
+                )
+                self.egoState.speed = self._ego_target_speed  # 初始速度对齐期望速度
 
         # 2. 初始化背景车状态
         for name, info in self.currentVehicles.items():
             if name == self.egoName:
-                continue # Ego 的路径已单独处理，不计入背景车
-                
+                continue  # Ego 的路径已单独处理，不计入背景车
+
             smoothed = MultiVehicleInference._smoothPath(info["path"], 1.0)
             totalLen = MultiVehicleInference._pathLength(smoothed)
 
@@ -782,7 +845,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 "speed": info["speed"],
                 "progress": 0.0,
                 "smoothed": smoothed,
-                "path": info.get("path",[]),
+                "path": info.get("path", []),
                 "totalLength": totalLen,
                 "prevHeading": 0.0,
                 "x": init_x,
@@ -821,7 +884,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         后期接入选手模型：可在此处或 _afterOneStepTraining 中加载选手的 .zip 模型并预测动作。
         """
         vsMap = {}
-        
+
         for name, agent in self.bgAgents.items():
             if self._isTessngControlledBg(name):
                 continue
@@ -876,7 +939,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         waypoints = []
         for index, (x, y) in enumerate(smoothed):
-            waypoint = self.createTessngWaypoint(QPointF(x, -y), index, agent.get("speed", 10.0))
+            waypoint = self.createTessngWaypoint(
+                QPointF(x, -y), index, agent.get("speed", 10.0)
+            )
             if waypoint:
                 waypoints.append(waypoint)
 
@@ -900,7 +965,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             return False
 
         self.tessngBgRoutingByName[name] = routing
-        print(f"[TESSNG BG] {name} 使用 TESSNG single routing 控制, routing_id={routing.id()}")
+        print(
+            f"[TESSNG BG] {name} 使用 TESSNG single routing 控制, routing_id={routing.id()}"
+        )
         return True
 
     def createTessngWaypoint(self, point, number, speed):
@@ -956,12 +1023,16 @@ class MySimulator(QObject, PyCustomerSimulator):
             if not lane:
                 return False
             lane_number = lane.number()
-            dispatch_point = netIface.createDispatchPoint(link, first_wp.distToStart(), lane_number)
+            dispatch_point = netIface.createDispatchPoint(
+                link, first_wp.distToStart(), lane_number
+            )
         elif connector:
             lane_connector = lane_object.castToLaneConnector()
             if not lane_connector:
                 return False
-            dispatch_point = netIface.createDispatchPoint(connector, first_wp.distToStart())
+            dispatch_point = netIface.createDispatchPoint(
+                connector, first_wp.distToStart()
+            )
 
         if not dispatch_point:
             return False
@@ -1021,19 +1092,19 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.yawRateCalc.reset()
         self.prevSteer = 0.0
         self.stepCount = 0
-        self.egoState = None # 触发 _updateEgoByRL 中的初始位姿分配
+        self.egoState = None  # 触发 _updateEgoByRL 中的初始位姿分配
         self._is_collision = False
         self._is_out_of_bounds = False
-        self._is_reached_goal = False # 清理终点标志
-        self._prev_s_ego = 0.0 # 清理进度缓存
-        self._current_lateral_dist = 0.0 # 清理横向偏差缓存
-        self._current_angle_diff = 0.0 # 清理航向角偏差缓存
-        self._ego_stuck_count = 0 # 清理卡死计数
+        self._is_reached_goal = False  # 清理终点标志
+        self._prev_s_ego = 0.0  # 清理进度缓存
+        self._current_lateral_dist = 0.0  # 清理横向偏差缓存
+        self._current_angle_diff = 0.0  # 清理航向角偏差缓存
+        self._ego_stuck_count = 0  # 清理卡死计数
 
         # 切换场景
         self.clearTessngBgVehicles()
         self._doSwitchScenario()
-        
+
         for name, agent in self.bgAgents.items():
             info = self.currentVehicles.get(name, {})
             agent["speed"] = info.get("speed", 10.0)
@@ -1041,7 +1112,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             smoothed = agent["smoothed"]
             init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
             agent["x"], agent["y"] = init_x, init_y
-            
+
         self.isFirstStep = True
         print(f"\n[Reset] Ego 状态已重置，开始新的 Episode。")
 
@@ -1082,7 +1153,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             "curvature_radius": None,
             "current_steer": 0.0,
         }
-        
+
         # 判断是 Ego 还是背景车，选择对应的路径
         egoTessngId = self.tessAuto.avName2TessngIdMap.get(self.egoName)
         is_ego = vehicle.id() == egoTessngId
@@ -1111,7 +1182,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         obs[5] = np.clip((control[1] / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
         obs[6] = np.clip((control[0] - MAX_DECEL) / (MAX_ACCEL - MAX_DECEL), 0, 1)
         obs[7] = np.clip((prev_steer / (2 * MAX_STEER_ANGLE)) + 0.5, 0, 1)
-        
+
         obs_info["current_steer"] = float(control[1])
 
         MAX_YAW_RATE = 1.0
@@ -1123,12 +1194,15 @@ class MySimulator(QObject, PyCustomerSimulator):
             sparse = NavigationCalculator.sparsifyByDistance(centerLine, 3.0)
             vPos = vehicle.pos()
             navResult = NavigationCalculator.compute(
-                p2m(vPos.x()), p2m(vPos.y()), vehicle.angle(),
-                sparse, numCheckpoints=4,
+                p2m(vPos.x()),
+                p2m(vPos.y()),
+                vehicle.angle(),
+                sparse,
+                numCheckpoints=4,
             )
             # [新增] 缓存归一化的曲率半径，供奖励函数计算动态限速
             obs_info["curvature_radius"] = navResult.curvatureRadius
-            
+
             for i in range(min(5, len(navResult.forwardGaps))):
                 obs[9 + i * 2] = navResult.forwardGaps[i]
                 obs[9 + i * 2 + 1] = navResult.lateralGaps[i]
@@ -1232,7 +1306,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             (p2m(actual_x) - p2m(ego.x)) ** 2 + (p2m(actual_y) - p2m(ego.y)) ** 2
         )
 
-        real_x, real_y, expected_heading = self._posOnPath(agent["smoothed"], agent["progress"])
+        real_x, real_y, expected_heading = self._posOnPath(
+            agent["smoothed"], agent["progress"]
+        )
 
         return {
             "ego_x": ego.x,
@@ -1251,7 +1327,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             "agent_speed": agent["speed"],
             "real_x": real_x,
             "real_y": real_y,
-            "expected_heading": expected_heading
+            "expected_heading": expected_heading,
         }
 
     def _r_survival(self, s):
@@ -1269,8 +1345,8 @@ class MySimulator(QObject, PyCustomerSimulator):
             return +0.02 * (1 - (d - 15) / 15)
         else:
             return -0.05
-        
-    def _r_stop(self,agent):
+
+    def _r_stop(self, agent):
         # 7.5 卡死连续惩罚（不终止，只扣分）
         if agent["speed"] < 0.1:
             agent["_stuck_count_reward"] = agent.get("_stuck_count_reward", 0) + 1
@@ -1279,19 +1355,19 @@ class MySimulator(QObject, PyCustomerSimulator):
                 return -0.1 * min(10.0, (agent["_stuck_count_reward"] - 10) / 5.0)
         else:
             agent["_stuck_count_reward"] = 0
-        
+
         return 0
-    
+
     def _r_progress(self, s):
         # 计算实际速度在期望方向上的投影
         # 如果转圈时车头反了，投影就是负的，不仅不给奖还要扣分
         expected_heading = s["expected_heading"]
         actual_heading = s["actual_heading"]
-        
+
         diff_rad = math.radians(actual_heading - expected_heading)
         # 投影速度 = 速率 * cos(角度差)
         projected_speed = s["agent_speed"] * math.cos(diff_rad)
-        
+
         if projected_speed > 0.5:
             return 0.1 * projected_speed
         else:
@@ -1329,7 +1405,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 抖动惩罚, 防止“画龙”和剧烈摆动
         prev = agent.get("prev_steer", 0.0)
-        r -= abs(steer - prev) * 1.5 # 增加突变惩罚
+        r -= abs(steer - prev) * 1.5  # 增加突变惩罚
         agent["prev_steer"] = steer
 
         return r
@@ -1381,7 +1457,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # === 3. 连续惩罚（核心）===
         # 0~5°：基本合理
-        if diff < 5:    
+        if diff < 5:
             penalty = 0.0
 
         # 5~45°：逐渐惩罚（线性）
@@ -1436,7 +1512,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         #     if agent["progress"] >= agent["totalLength"]:
         #         print("[Done] 主攻手到达终点。")
         #         return True
-            
+
         #     if agent["speed"] < 0.1:
         #         agent["_stuck_count"] = agent.get("_stuck_count", 0) + 1
         #         if agent["_stuck_count"] > 15:
@@ -1459,7 +1535,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         if not path or len(path) < 2:
             return 0.0, 0.0, 0.0, 0.0
 
-        min_dist = float('inf')
+        min_dist = float("inf")
         best_s = 0.0
         accumulated_s = 0.0
         best_lateral = 0.0
@@ -1487,13 +1563,18 @@ class MySimulator(QObject, PyCustomerSimulator):
                 min_dist = dist
                 best_s = accumulated_s + t * seg_len
                 best_lateral = dist
-                
+
                 dx, dy = seg_vec[0], seg_vec[1]
                 best_heading = math.degrees(math.atan2(dx, dy)) % 360.0
 
             accumulated_s += seg_len
 
-        return float(best_s), float(accumulated_s), float(best_lateral), float(best_heading)
+        return (
+            float(best_s),
+            float(accumulated_s),
+            float(best_lateral),
+            float(best_heading),
+        )
 
     def findBgVehicle(self, vehicles):
         """找到主车和所有背景车"""
@@ -1511,6 +1592,7 @@ class MySimulator(QObject, PyCustomerSimulator):
     @staticmethod
     def _check_bbox_collision(x1, y1, heading1, l1, w1, x2, y2, heading2, l2, w2):
         """使用分离轴定理(SAT)检测两个OBB(带有朝向的矩形)是否发生碰撞"""
+
         def get_corners(cx, cy, heading, length, width):
             # 将 heading 转换为数学弧度 (90 - heading)
             rad = math.radians(90.0 - heading)
@@ -1527,12 +1609,12 @@ class MySimulator(QObject, PyCustomerSimulator):
                 (cx + dx1 + dx2, cy + dy1 + dy2),
                 (cx + dx1 - dx2, cy + dy1 - dy2),
                 (cx - dx1 - dx2, cy - dy1 - dy2),
-                (cx - dx1 + dx2, cy - dy1 + dy2)
+                (cx - dx1 + dx2, cy - dy1 + dy2),
             ]
 
         def get_axes(corners):
             axes = []
-            for i in range(2): # 矩形只需要相邻两条边的法向量
+            for i in range(2):  # 矩形只需要相邻两条边的法向量
                 p1 = corners[i]
                 p2 = corners[(i + 1) % 4]
                 dx = p2[0] - p1[0]
@@ -1548,20 +1630,20 @@ class MySimulator(QObject, PyCustomerSimulator):
         axes = get_axes(corners1) + get_axes(corners2)
 
         for axis in axes:
-            min1, max1 = float('inf'), float('-inf')
+            min1, max1 = float("inf"), float("-inf")
             for p in corners1:
                 proj = p[0] * axis[0] + p[1] * axis[1]
                 min1, max1 = min(min1, proj), max(max1, proj)
-                
-            min2, max2 = float('inf'), float('-inf')
+
+            min2, max2 = float("inf"), float("-inf")
             for p in corners2:
                 proj = p[0] * axis[0] + p[1] * axis[1]
                 min2, max2 = min(min2, proj), max(max2, proj)
-                
+
             if max1 < min2 or max2 < min1:
-                return False # 找到分离轴，没有碰撞
-                
-        return True # 所有轴都有重叠，发生碰撞
+                return False  # 找到分离轴，没有碰撞
+
+        return True  # 所有轴都有重叠，发生碰撞
 
     @staticmethod
     def _posOnPath(smoothed, dist):
