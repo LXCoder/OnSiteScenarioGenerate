@@ -1,0 +1,20 @@
+[
+  {
+    "name": "test-scene-a",
+    "NET_PATH": "Data/scenario_0a6bf824.tess",
+    "BG_MODEL_FILENAME": "model.zip.v6",
+    "DATA_DIR": "Data",
+    "FILTER_SCENES": [
+      "scene_01.json",
+      "scene_02.json"
+    ],
+    "USE_TEST_LOGIC": true
+  },
+  {
+    "name": "prod-scene-b",
+    "NET_PATH": "Data/YYT_TJST_0619_unlimited.tess",
+    "BG_MODEL_FILENAME": "model.zip.v7",
+    "DATA_DIR": "Data/prod",
+    "USE_TEST_LOGIC": false
+  }
+]
