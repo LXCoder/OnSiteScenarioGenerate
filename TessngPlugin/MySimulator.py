@@ -17,9 +17,10 @@ import os
 import threading
 import numpy as np
 
-from PySide2.QtCore import QObject, Signal
+from PySide2.QtCore import QObject, QPointF, Signal
 
 from Tessng import (
+    Online,
     PyCustomerSimulator,
     tessngIFace,
     p2m,
@@ -90,6 +91,12 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.currentScenarioIdx = 0
         self.currentVehicles = {}
         self.bgAgents = {}  # 背景车运行状态
+        self.tessngBgRoutingByName = {}
+        self.tessngControlledBgNames = {
+            name.strip()
+            for name in os.getenv("TESSNG_BG_NAMES", "").split(",")
+            if name.strip()
+        }
 
         # 主车最新状态（每帧从 TestPlayer.act() 读取）
         self.egoState = None
@@ -458,6 +465,10 @@ class MySimulator(QObject, PyCustomerSimulator):
             vsMap = {self.egoName: self.egoState}
             # 初始化背景车状态
             for name, agent in self.bgAgents.items():
+                if self._isTessngControlledBg(name):
+                    self.createTessngBgVehicle(name, agent)
+                    continue
+
                 x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
                 agent["state"] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
                 agent["prev_control"] = (0.0, 0.0)
@@ -586,6 +597,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._inferCreated = False
             
             if REPEAT_SINGLE_SCENARIO:
+                self.clearTessngBgVehicles()
                 if getattr(self, "multiInfer", None):
                     self.multiInfer.resetAll()
             else:
@@ -770,10 +782,13 @@ class MySimulator(QObject, PyCustomerSimulator):
                 "speed": info["speed"],
                 "progress": 0.0,
                 "smoothed": smoothed,
+                "path": info.get("path",[]),
                 "totalLength": totalLen,
                 "prevHeading": 0.0,
                 "x": init_x,
                 "y": init_y,
+                "color": info.get("color"),
+                "controlMode": self._bgControlMode(name, info),
             }
 
     # ============================================================
@@ -784,6 +799,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         """在 Tessng 中创建背景车"""
         vsMap = {}
         for name, agent in self.bgAgents.items():
+            if self._isTessngControlledBg(name):
+                self.createTessngBgVehicle(name, agent)
+                continue
+
             s = agent["smoothed"]
             if len(s) < 2:
                 continue
@@ -804,6 +823,9 @@ class MySimulator(QObject, PyCustomerSimulator):
         vsMap = {}
         
         for name, agent in self.bgAgents.items():
+            if self._isTessngControlledBg(name):
+                continue
+
             s = agent["smoothed"]
             if len(s) < 2:
                 continue
@@ -816,6 +838,179 @@ class MySimulator(QObject, PyCustomerSimulator):
             vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
 
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
+
+    def _bgControlMode(self, name, info):
+        mode = str(info.get("control", info.get("controlMode", ""))).strip().lower()
+        if name in self.tessngControlledBgNames:
+            return "tessng"
+        if mode in {"tessng", "native", "builtin", "built-in", "base"}:
+            return "tessng"
+        return "model"
+
+    def _isTessngControlledBg(self, name):
+        agent = self.bgAgents.get(name)
+        return bool(agent and agent.get("controlMode") == "tessng")
+
+    def createTessngBgVehicle(self, name, agent):
+        """Create a TESSNG-driven background vehicle via single routing."""
+        self.removeExternalBgControl(name)
+
+        if self.createTessngBgRouting(name, agent):
+            return
+
+        print(f"[TESSNG BG] {name} 创建 single routing 失败，跳过该车辆")
+
+    def createTessngBgRouting(self, name, agent):
+        """Create a TESSNG single routing for a background vehicle."""
+        if name in self.tessngBgRoutingByName:
+            return True
+
+        netIface = self.netIface or tessngIFace().netInterface()
+        simIface = self.simIface or tessngIFace().simuInterface()
+        if not netIface or not simIface:
+            return False
+
+        smoothed = agent.get("path") or []
+        if len(smoothed) < 2:
+            return False
+
+        waypoints = []
+        for index, (x, y) in enumerate(smoothed):
+            waypoint = self.createTessngWaypoint(QPointF(x, -y), index, agent.get("speed", 10.0))
+            if waypoint:
+                waypoints.append(waypoint)
+
+        if len(waypoints) < 2:
+            print(f"[TESSNG BG] {name} 创建 routing 失败: 有效 waypoint 不足")
+            return False
+
+        first_point = QPointF(smoothed[0][0], -smoothed[0][1])
+        if not self.setupTessngRoutingDispatch(first_point, waypoints):
+            print(f"[TESSNG BG] {name} 创建 routing 失败: 发车点创建失败")
+            return False
+
+        param = Online.DynaSingleRoutingParam()
+        param.level = "lane"
+        param.lWaypointId = [wp.id() for wp in waypoints]
+        param.desiredMode = int(agent.get("desiredMode", 0))
+
+        routing = netIface.createSingleRouting(param, waypoints)
+        if not routing:
+            print(f"[TESSNG BG] {name} 创建 single routing 失败")
+            return False
+
+        self.tessngBgRoutingByName[name] = routing
+        print(f"[TESSNG BG] {name} 使用 TESSNG single routing 控制, routing_id={routing.id()}")
+        return True
+
+    def createTessngWaypoint(self, point, number, speed):
+        netIface = self.netIface or tessngIFace().netInterface()
+        locations = netIface.locateOnCrid(point, 9)
+        if not locations:
+            print(f"[TESSNG BG] waypoint 无法定位: ({point.x():.2f}, {point.y():.2f})")
+            return None
+
+        param = Online.DynaWaypointParam()
+        param.number = number
+        param.desiredSpeed = speed
+        param.desiredTime = 0
+        param.bRemoveVehi = False
+
+        lane_object = locations[0].pLaneObject
+        if lane_object.isLane():
+            lane = lane_object.castToLane()
+            param.type = "lane"
+            param.roadId = lane.link().id()
+            param.dist = lane.distToStartPoint(point)
+            param.laneId = lane.id()
+        else:
+            lane_connector = lane_object.castToLaneConnector()
+            param.type = "laneconnector"
+            param.roadId = lane_connector.connector().id()
+            param.dist = lane_connector.distToStartPoint(point)
+            param.laneId = lane_connector.fromLane().id()
+            param.toLaneId = lane_connector.toLane().id()
+
+        return netIface.createWaypoint(param)
+
+    def setupTessngRoutingDispatch(self, first_point, waypoints):
+        netIface = self.netIface or tessngIFace().netInterface()
+        simIface = self.simIface or tessngIFace().simuInterface()
+        first_wp = waypoints[0]
+
+        link = netIface.findLink(first_wp.roadId())
+        connector = netIface.findConnector(first_wp.roadId())
+        if not link and not connector:
+            return False
+
+        locations = netIface.locateOnCrid(first_point, 9)
+        if not locations:
+            return False
+
+        lane_object = locations[0].pLaneObject
+        dispatch_point = None
+        lane_number = None
+
+        if link:
+            lane = lane_object.castToLane()
+            if not lane:
+                return False
+            lane_number = lane.number()
+            dispatch_point = netIface.createDispatchPoint(link, first_wp.distToStart(), lane_number)
+        elif connector:
+            lane_connector = lane_object.castToLaneConnector()
+            if not lane_connector:
+                return False
+            dispatch_point = netIface.createDispatchPoint(connector, first_wp.distToStart())
+
+        if not dispatch_point:
+            return False
+
+        netIface.setDispatchVisable(dispatch_point, False)
+
+        simu_time_sec = int(simIface.simuTimeIntervalWithAcceMutiples() / 1000)
+        dispatch_point.setDispatchMode(1)
+
+        if hasattr(dispatch_point, "addDispatchTime"):
+            if lane_number is None:
+                dispatch_point.addDispatchTime(1, simu_time_sec)
+            else:
+                dispatch_point.addDispatchTime(1, simu_time_sec, lane_number)
+        else:
+            dispatch_point.addDispatchInterval(1, 20, 1)
+
+        first_wp.setDeparturePointId(dispatch_point.id())
+        waypoints[-1].setRemoveVehi(True)
+        return True
+
+    def removeExternalBgControl(self, name):
+        """Remove a vehicle name from the external-vehicle control channel."""
+        self.tessAuto.avChannel2AvMsgMap.pop(name, None)
+
+        tessng_id = self.tessAuto.avName2TessngIdMap.pop(name, None)
+        if tessng_id is not None:
+            self.tessAuto.tessngId2AvNameMap.pop(tessng_id, None)
+            self.tessAuto.alreadyLaunchedTessngIdSet.discard(tessng_id)
+            self.tessAuto.alreadyLaunchedAvIdSet.discard(tessng_id)
+
+        self.tessAuto.alreadyLaunchedAvNameSet.discard(name)
+        self.tessAuto.mainVehiclePtrDict.pop(name, None)
+
+    def clearTessngBgVehicles(self):
+        """Stop normal TESSNG-controlled background vehicles before recreating a scenario."""
+        simIface = self.simIface or tessngIFace().simuInterface()
+        netIface = self.netIface or tessngIFace().netInterface()
+
+        for name, routing in list(self.tessngBgRoutingByName.items()):
+            try:
+                if simIface:
+                    for vehicle in simIface.getVehiclesOnSingleRouting(routing.id()):
+                        simIface.stopVehicleDriving(vehicle)
+
+                netIface.removeSingleRouting(routing)
+            except Exception as e:
+                print(f"[TESSNG BG] 清理 routing 失败 {name}: {e}")
+        self.tessngBgRoutingByName.clear()
 
     # ============================================================
     #  环境回调
@@ -836,6 +1031,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._ego_stuck_count = 0 # 清理卡死计数
 
         # 切换场景
+        self.clearTessngBgVehicles()
         self._doSwitchScenario()
         
         for name, agent in self.bgAgents.items():

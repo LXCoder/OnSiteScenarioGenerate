@@ -127,6 +127,7 @@ class ScenarioLoader:
                 "path": path,
                 "speed": speed,
                 "color": color,
+                "control": info.get("control", info.get("controlMode", "model")),
             }
 
         return {"vehicles": vehicles}
