@@ -17,7 +17,7 @@ import os
 import threading
 import numpy as np
 
-from PySide2.QtCore import QObject, QPointF, Signal
+from PySide2.QtCore import QObject, QPointF, Signal,QCoreApplication
 
 from Tessng import (
     Online,
@@ -55,6 +55,7 @@ from Utils.Constant import (
     MAX_ACC_DELTA,
     MAX_STEER_DELTA,
     REPEAT_SINGLE_SCENARIO,
+    EXIT_ON_SIMULATION_STOP
 )
 
 
@@ -189,6 +190,8 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def afterStop(self):
         print("[MySimulator] 仿真结束")
+        if EXIT_ON_SIMULATION_STOP:
+            QCoreApplication.quit()
 
     def afterPause(self):
         print("[MySimulator] 仿真暂停")
@@ -962,6 +965,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         param.level = "lane"
         param.lWaypointId = [wp.id() for wp in waypoints]
         param.desiredMode = int(agent.get("desiredMode", 0))
+        param.name = "routing"
 
         routing = netIface.createSingleRouting(param, waypoints)
         if not routing:
