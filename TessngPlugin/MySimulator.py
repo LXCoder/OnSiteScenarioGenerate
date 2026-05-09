@@ -903,6 +903,9 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
 
     def _bgControlMode(self, name, info):
+        """
+        确定背景车的控制模式。
+        """
         mode = str(info.get("control", info.get("controlMode", ""))).strip().lower()
         if name in self.tessngControlledBgNames:
             return "tessng"
@@ -911,11 +914,12 @@ class MySimulator(QObject, PyCustomerSimulator):
         return "model"
 
     def _isTessngControlledBg(self, name):
+        """判断指定背景车是否由 TESSNG single routing 控制"""
         agent = self.bgAgents.get(name)
         return bool(agent and agent.get("controlMode") == "tessng")
 
     def createTessngBgVehicle(self, name, agent):
-        """Create a TESSNG-driven background vehicle via single routing."""
+        """创建 TESSNG 驱动的背景车"""
         self.removeExternalBgControl(name)
 
         if self.createTessngBgRouting(name, agent):
@@ -924,7 +928,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         print(f"[TESSNG BG] {name} 创建 single routing 失败，跳过该车辆")
 
     def createTessngBgRouting(self, name, agent):
-        """Create a TESSNG single routing for a background vehicle."""
+        """创建 TESSNG single routing 来控制背景车辆"""
         if name in self.tessngBgRoutingByName:
             return True
 
@@ -971,6 +975,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         return True
 
     def createTessngWaypoint(self, point, number, speed):
+        """创建TESSNG途径点"""
         netIface = self.netIface or tessngIFace().netInterface()
         locations = netIface.locateOnCrid(point, 9)
         if not locations:
@@ -1001,12 +1006,27 @@ class MySimulator(QObject, PyCustomerSimulator):
         return netIface.createWaypoint(param)
 
     def setupTessngRoutingDispatch(self, first_point, waypoints):
+        """设置 TESSNG single routing 的发车点和路径点
+
+        该函数用于在TESSNG仿真环境中为single routing模式创建车辆发车点，并配置路径点参数。
+        主要流程：查找道路/连接器 -> 定位车道 -> 创建发车点 -> 配置发车参数 -> 关联路径点
+
+        Args:
+            first_point: 起始点坐标，用于定位发车车道
+            waypoints: 路径点列表，包含车辆行驶的完整路径信息
+
+        Returns:
+            bool: 成功返回True，失败返回False
+        """
+
         netIface = self.netIface or tessngIFace().netInterface()
         simIface = self.simIface or tessngIFace().simuInterface()
-        first_wp = waypoints[0]
+        first_wp = waypoints[0]  # 获取第一个路径点
 
+        # 根据第一个路径点的道路ID查找Link（路段）和Connector（连接段）
         link = netIface.findLink(first_wp.roadId())
         connector = netIface.findConnector(first_wp.roadId())
+        # 既不是路段也不是连接段，无法创建发车点
         if not link and not connector:
             return False
 
@@ -1014,9 +1034,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         if not locations:
             return False
 
+        # 获取定位到的车道对象
         lane_object = locations[0].pLaneObject
-        dispatch_point = None
-        lane_number = None
+        dispatch_point = None  # 发车点对象
+        lane_number = None  # 车道编号
 
         if link:
             lane = lane_object.castToLane()
@@ -1034,14 +1055,18 @@ class MySimulator(QObject, PyCustomerSimulator):
                 connector, first_wp.distToStart()
             )
 
+        # 发车点创建失败
         if not dispatch_point:
             return False
 
+        # 设置发车点不可见（避免在界面上显示）
         netIface.setDispatchVisable(dispatch_point, False)
 
         simu_time_sec = int(simIface.simuTimeIntervalWithAcceMutiples() / 1000)
+        # 设置发车模式为1（立即发车模式）
         dispatch_point.setDispatchMode(1)
 
+        # 根据dispatch_point支持的方法设置发车时间
         if hasattr(dispatch_point, "addDispatchTime"):
             if lane_number is None:
                 dispatch_point.addDispatchTime(1, simu_time_sec)
@@ -1050,12 +1075,17 @@ class MySimulator(QObject, PyCustomerSimulator):
         else:
             dispatch_point.addDispatchInterval(1, 20, 1)
 
+        # 将第一个路径点关联到发车点
         first_wp.setDeparturePointId(dispatch_point.id())
+        # 设置最后一个路径点为移除车辆（到达终点后自动移除）
         waypoints[-1].setRemoveVehi(True)
         return True
 
     def removeExternalBgControl(self, name):
-        """Remove a vehicle name from the external-vehicle control channel."""
+        """
+        根据 name 移除模型控制的背景车
+        清理 TESSNG single routing 和相关映射
+        """
         self.tessAuto.avChannel2AvMsgMap.pop(name, None)
 
         tessng_id = self.tessAuto.avName2TessngIdMap.pop(name, None)
@@ -1068,7 +1098,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.tessAuto.mainVehiclePtrDict.pop(name, None)
 
     def clearTessngBgVehicles(self):
-        """Stop normal TESSNG-controlled background vehicles before recreating a scenario."""
+        """在重新创建场景之前，停止所有受TESSNG控制的后台车辆的行驶并移除它们的 routing"""
         simIface = self.simIface or tessngIFace().simuInterface()
         netIface = self.netIface or tessngIFace().netInterface()
 
@@ -1117,8 +1147,11 @@ class MySimulator(QObject, PyCustomerSimulator):
         print(f"\n[Reset] Ego 状态已重置，开始新的 Episode。")
 
     def _doSwitchScenario(self):
+        """切换场景的核心逻辑：训练模式随机切换，推理模式顺序切换"""
+
         if not self.scenarios:
             return
+
         if TRAIN_MODE:
             # 如果队列空了，重新装填并洗牌
             if not self.scenario_indices:
@@ -1143,11 +1176,11 @@ class MySimulator(QObject, PyCustomerSimulator):
     def buildInitialObs(self):
         return np.zeros(94, dtype=np.float32)
 
-    # ============================================================
-    #  观测（根据主体车辆计算）
-    # ============================================================
-
     def buildObs(self, vehicle, vehicles):
+        """
+        构建观测向量（根据主体车辆计算）, 即状态空间,
+        包含 94 维特征，并返回一个字典包含 Ego 相关的额外信息供奖励函数使用
+        """
         obs = np.zeros(94, dtype=np.float32)
         obs_info = {
             "curvature_radius": None,
@@ -1227,10 +1260,11 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._current_curvature_radius = curvature_radius
 
     # ============================================================
-    #  奖励（背景车视角，鼓励干扰主车）
+    # Start: 训练背景车的奖励函数设计（核心：鼓励干扰主车，惩罚保持理想状态）
+    # 注：项目转为训练主车，这部分逻辑保留但不再使用，未来可根据需求启用
     # ============================================================
-
     def computeReward(self, bgVehicle) -> float:
+        """奖励函数设计：鼓励背景车干扰主车，惩罚主车保持理想状态"""
         attacker_name = getattr(self, "_attacker_name", None)
         if (
             not self.bgAgents
@@ -1331,9 +1365,11 @@ class MySimulator(QObject, PyCustomerSimulator):
         }
 
     def _r_survival(self, s):
+        """生存奖励：鼓励保持速度，避免碰撞"""
         return 0.05 if s["agent_speed"] > 0.5 else 0.0
 
     def _r_distance(self, s):
+        """距离控制：鼓励保持理想距离，避免过近过远"""
         d = s["distToEgo"]
 
         # 理想距离：5~15m
@@ -1347,6 +1383,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             return -0.05
 
     def _r_stop(self, agent):
+        """停止惩罚：鼓励持续移动，防止卡位不动"""
         # 7.5 卡死连续惩罚（不终止，只扣分）
         if agent["speed"] < 0.1:
             agent["_stuck_count_reward"] = agent.get("_stuck_count_reward", 0) + 1
@@ -1359,6 +1396,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         return 0
 
     def _r_progress(self, s):
+        """进度奖励：鼓励进度匹配和速度提升"""
         # 计算实际速度在期望方向上的投影
         # 如果转圈时车头反了，投影就是负的，不仅不给奖还要扣分
         expected_heading = s["expected_heading"]
@@ -1375,6 +1413,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             return -0.5
 
     def _r_interaction(self, s):
+        """对抗行为奖励：鼓励背景车卡位、追击和阻挡"""
         r = 0.0
 
         forward = s["forwardDist"]
@@ -1396,6 +1435,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         return r
 
     def _r_action(self, agent):
+        """行为约束：限制过激的转向和加减速，鼓励平稳干扰"""
         accel, steer = self.currentControl
 
         r = 0.0
@@ -1411,6 +1451,12 @@ class MySimulator(QObject, PyCustomerSimulator):
         return r
 
     def _r_lane(self, bgVehicle):
+        """
+        车道约束：
+        - 轻微偏离（0~1m）：无惩罚
+        - 中等偏离（1~2.5m）：0.5惩罚
+        - 严重偏离（2.5~3m）：-3惩罚
+        """
         lane = LaneProjector.fromTessngVehicle(bgVehicle, p2m)
         if not lane:
             return -3.0, True
@@ -1426,6 +1472,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             return 0.0, False
 
     def _check_collision(self, s):
+        """
+        检查是否发生碰撞
+        """
         return self._check_bbox_collision(
             s["actual_x"],
             s["actual_y"],
@@ -1481,11 +1530,10 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         return penalty, False
 
-    # ============================================================
-    #  终止判断
-    # ============================================================
-
     def checkDone(self) -> bool:
+        """
+        终止判断：检查背景车是否完成任务
+        """
         # 1. 发生碰撞，干扰成功
         if getattr(self, "_is_collision", False):
             print("[Done] 主攻手发生碰撞! 干扰任务圆满完成。")
@@ -1522,6 +1570,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         #         agent["_stuck_count"] = 0
 
         return False
+
+    # ============================================================
+    # End: 训练背景车的奖励函数设计
+    # ============================================================
 
     # ============================================================
     #  工具
