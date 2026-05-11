@@ -1092,9 +1092,11 @@ class MySimulator(QObject, PyCustomerSimulator):
             try:
                 if simIface:
                     for vehicle in simIface.getVehiclesOnSingleRouting(routing.id()):
-                        simIface.stopVehicleDriving(vehicle)
+                        print(f"[TESSNG BG] 停止 {name} (ID: {vehicle.id()}) 的行驶")
+                        vehicle.vehicleDriving().stopVehicle()
 
                 netIface.removeSingleRouting(routing)
+                print(f"[TESSNG BG] 已清理 routing {name} (ID: {routing.id()})")
             except Exception as e:
                 print(f"[TESSNG BG] 清理 routing 失败 {name}: {e}")
         self.tessngBgRoutingByName.clear()

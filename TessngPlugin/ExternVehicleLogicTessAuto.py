@@ -28,6 +28,8 @@ class TessAutoPyInterface(object):
 
 		self.mainVehiclePtrDict = dict()
 
+		self._removeAvNames = []
+
 	# ================================================================
 	#  写入数据
 	# ================================================================
@@ -86,7 +88,7 @@ class TessAutoPyInterface(object):
 		autoInterface = self.iface.autoInterface()
 
 		if avName in self.alreadyLaunchedAvNameSet:
-			return True
+			return 0
 
 		vs = self.buildVehicleStatus(avName, state)
 
@@ -100,6 +102,7 @@ class TessAutoPyInterface(object):
 				print(f"avName {avName}, set color to #fc0703")
 		else:
 			print("tessng auto interface is null")
+			return 1
 
 		if avVehiclePtr:
 			mainVehi = avVehiclePtr.get()
@@ -113,9 +116,11 @@ class TessAutoPyInterface(object):
 
 			print(f"avName->{avName}, avTessngId->{mainVehiId}, succeed to create av, point is [{state.x}, {-state.y}]")
 			self.alreadyLaunchedAvIdSet.add(mainVehiId)
-			return False
+			return 0
+		else:
+			print(f"avName {avName}, failed to create av, point is [{state.x}, {-state.y}]")
 
-		return True
+		return -1
 
 	def updateTessngAutoAv(self, avName: str, state: VehicleState, pIVehicle=None):
 		"""更新 Tessng 中已有车辆的动态状态"""
@@ -146,15 +151,23 @@ class TessAutoPyInterface(object):
 	# ================================================================
 
 	def vehicleCreateAndUpdate(self, pIVehicle=None):
+		
 		for avName, state in self.avChannel2AvMsgMap.items():
-			self.createTessngAutoAv(avName, state)
+			# if avName in self._removeAvNames:
+			# 	continue
+			result = self.createTessngAutoAv(avName, state)
 			self.updateTessngAutoAv(avName, state, pIVehicle)
+			if result < 0:
+				self._removeAvNames.append(avName)
 
 	def vehicleCreate(self):
 		for avName, state in self.avChannel2AvMsgMap.items():
+			# if avName in self._removeAvNames:
+			# 	continue
 			createSuccess = self.createTessngAutoAv(avName, state)
-			if createSuccess:
-				continue
+			if createSuccess < 0:
+				self._removeAvNames.append(avName)
+		
 
 	def vehicleUpdate(self, pIVehicle=None):
 		for avName, state in self.avChannel2AvMsgMap.items():
