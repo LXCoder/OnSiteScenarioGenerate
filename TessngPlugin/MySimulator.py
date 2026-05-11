@@ -1,16 +1,4 @@
-"""
-MySimulator —— 主车(选手) + 背景车(DQN) 集成
 
-架构：
-  主车(ego): 由 TestPlayer（选手代码）控制，通过 PlayerManager 加载
-             MySimulator 只读取主车的位置/航向角，不控制它
-  背景车:    由 DQN 模型控制，沿 Data/ 目录下 JSON 定义的路径行驶
-             训练目标：学会干扰主车
-
-流程：
-  训练模式 → DQN 控制背景车，观测包含主车位置，奖励鼓励干扰主车
-  推理模式 → 加载训练好的模型，背景车 + 主车同时运行
-"""
 
 import math
 import os
@@ -35,7 +23,7 @@ from Utils.LaneProjector import LaneProjector
 from Utils.NavigationCalculator import NavigationCalculator
 from Utils.SurroundingCalculator import SurroundingCalculator
 from Utils.YawRateCalculator import YawRateCalculator
-from ScenarioLoader import ScenarioLoader
+from Utils.ScenarioLoader import g_scenario_loader
 from MultiVehicleInference import MultiVehicleInference
 from Utils.Constant import (
     WHEEL_BASE,
@@ -46,8 +34,6 @@ from Utils.Constant import (
     MAX_DECEL,
     TRAIN_MODE,
     TOTAL_TIMESTEPS,
-    DATA_DIR,
-    FILTER_SCENES,
     RL_ALGO,
     MODEL_SAVE_DIR,
     TENSORBOARD_LOG,
@@ -81,12 +67,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.egoName = "ego"
         self.egoSmoothedPath = []  # 初始化为空，切换场景时动态加载
 
-        # ===== 背景车：从 Data 目录 JSON 加载，由 DQN 控制 =====
-        scene_dir = os.path.join(DATA_DIR, "test")
-        if TRAIN_MODE:
-            scene_dir = os.path.join(DATA_DIR, "train")
-        self.scenarioLoader = ScenarioLoader(scene_dir, FILTER_SCENES)
-        self.scenarios = self.scenarioLoader.loadAll()
+        # 获取场景数据
+        self.scenarios = g_scenario_loader.getScenarios().copy()
         self.scenario_indices = []  # 用来存放洗牌后的索引队列
 
         # 当前场景

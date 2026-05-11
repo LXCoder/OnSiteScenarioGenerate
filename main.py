@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from Utils.ScenarioLoader import g_scenario_loader
+
 
 
 WORKSPACE = Path(__file__).resolve().parent
@@ -59,9 +61,7 @@ def load_batch_configs(config_path):
             if not value
         ]
         if missing:
-            raise ValueError(
-                f"第 {index} 项缺少必填字段: {', '.join(missing)}"
-            )
+            raise ValueError(f"第 {index} 项缺少必填字段: {', '.join(missing)}")
 
         normalized.append(
             {
@@ -100,6 +100,9 @@ def apply_batch_env(env, config):
         ).lower()
     if config.get("TRAIN_MODE") is not None:
         env["TESSNG_TRAIN_MODE"] = str(config["TRAIN_MODE"]).lower()
+    
+    if config.get("TRAIN_TOTAL_TIMESTEPS") is not None:
+        env["TRAIN_TOTAL_TIMESTEPS"] = str(config["TRAIN_TOTAL_TIMESTEPS"])
 
 
 def run_batch(config_path):
@@ -126,9 +129,7 @@ def run_batch(config_path):
         result = subprocess.run(command, cwd=str(WORKSPACE), env=env)
 
         if result.returncode != 0:
-            print(
-                f"[批量] 任务失败: {config['name']}, returncode={result.returncode}"
-            )
+            print(f"[批量] 任务失败: {config['name']}, returncode={result.returncode}")
             return result.returncode
 
         print(f"[批量] 任务完成: {config['name']}")
@@ -147,9 +148,12 @@ def run_single():
     from Utils.Constant import NET_PATH
 
     app = QApplication()
+    
+    net_path = g_scenario_loader.getNetPath()
+    print(f"[单次] 启动仿真，NET_PATH={net_path}")
     config = {
         "__workspace": os.fspath(WORKSPACE),
-        "__netfilepath": NET_PATH,
+        "__netfilepath": net_path,
         "__simuafterload": True,
         "__custsimubysteps": False,
     }

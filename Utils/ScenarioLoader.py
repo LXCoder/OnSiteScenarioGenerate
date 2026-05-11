@@ -25,34 +25,80 @@ JSON 文件格式：
 """
 
 import os
+import sys
 import json
 from typing import List, Dict, Any
 from Utils.ConvertXosc2Scene import parse_xosc
-from Utils.Constant import USE_TEST_LOGIC
+from Utils.Constant import (
+    DATA_DIR,
+    TRAIN_MODE,
+    USE_TEST_LOGIC,
+    SCENE_TESS_MAPPING_PATH,
+    FILTER_SCENES,
+    NET_ROOT,
+    NET_PATH
+)
+
+
+def _init_scene_mapping(mapping_file: str):
+    scene_to_tess_mapping = {}
+    with open(mapping_file, "r", encoding="utf-8") as f:
+        conf = json.load(f)
+        mapping_conf = conf.get("map40_to_scene_names", {})
+        keys = ["A", "B", "C", "all"]
+        for map40 in mapping_conf:
+            for key in keys:
+                if key not in mapping_conf[map40]:
+                    continue
+
+                for scene_name in mapping_conf[map40][key]:
+                    if scene_name in scene_to_tess_mapping:
+                        scene_to_tess_mapping[scene_name]["type"].append(key)
+                        continue
+
+                    scene_to_tess_mapping[scene_name] = {
+                        "net_name": map40,
+                        "type": [key],
+                    }
+
+    return scene_to_tess_mapping
+
+
+g_scene_to_tess_mapping = _init_scene_mapping(SCENE_TESS_MAPPING_PATH)
 
 
 class ScenarioLoader:
-
     def __init__(self, dataDir: str, filter_scenes: list = []):
-        self.dataDir = dataDir
-        self.filter_scenes = filter_scenes
+        if TRAIN_MODE:
+            scene_dir = os.path.join(dataDir, "train")
+        else:
+            scene_dir = os.path.join(dataDir, "test")
 
-    def loadAll(self) -> List[Dict[str, Any]]:
+        self.dataDir = scene_dir
+        self.filter_scenes = filter_scenes
+        self.net_path = NET_PATH
+        self.scenarios = self._loadAll()
+
+    def getNetPath(self):
+        return self.net_path
+    
+    def getScenarios(self):
+        return self.scenarios
+
+    def _loadAll(self) -> List[Dict[str, Any]]:
         """
         加载目录下所有 JSON 文件
 
         Returns:
             [{"file": "xxx.json", "vehicles": {name: {"path": [(x,y),...], "speed": float}}}, ...]
         """
-        
 
         jsonFiles = []
         if USE_TEST_LOGIC:
-
             if not os.path.isdir(self.dataDir):
                 print(f"[ScenarioLoader] 目录不存在: {self.dataDir}")
                 return []
-            
+
             jsonFiles = [
                 f
                 for f in os.listdir(self.dataDir)
@@ -80,14 +126,26 @@ class ScenarioLoader:
         for filename in jsonFiles:
             if USE_TEST_LOGIC:
                 filepath = os.path.join(self.dataDir, filename)
-                scenario = self.loadFile(filepath)
+                scenario = self._loadFile(filepath)
             else:
                 scenario = parse_xosc(filename)
+                basename = os.path.basename(filename)
+                tess_info = self._getTessForScene(basename.split(".")[0])
+                if tess_info is None:
+                    msg = f"[ScenarioLoader] 未找到场景 {basename} 对应的 TESS 路网信息"
+                    print(msg)
+                    sys.exit(1)
+                full_net_path = os.path.join(NET_ROOT,f"{tess_info['net_name']}.tess")
+                if not os.path.exists(full_net_path):
+                    sys.exit(1)
+                
+                self.net_path = full_net_path
+                
                 traj = [
                     [pos[0], -pos[1]] for pos in scenario["vehicles"]["ego"]["path"]
                 ]
                 scenario["vehicles"]["ego"]["path"] = traj
-            
+
             if scenario:
                 scenario["file"] = filename
                 scenarios.append(scenario)
@@ -99,10 +157,10 @@ class ScenarioLoader:
 
         return scenarios
 
-    def loadFile(self, filepath: str) -> Dict[str, Any]:
+    def _loadFile(self, filepath: str) -> Dict[str, Any]:
         """加载单个 JSON 文件"""
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
             print(f"[ScenarioLoader] 读取失败 {filepath}: {e}")
@@ -131,3 +189,18 @@ class ScenarioLoader:
             }
 
         return {"vehicles": vehicles}
+
+    def _getTessForScene(self, scene_name: str):
+        """根据场景名称获取对应的 TESS 场景信息
+
+        Args:
+            scene_name: 场景名称（如 "scene_03"）
+
+        Returns:
+            包含 "net_name" 和 "type" 的字典，或 None（如果未找到）
+        """
+        return g_scene_to_tess_mapping.get(scene_name)
+    
+
+g_scenario_loader = ScenarioLoader(DATA_DIR, FILTER_SCENES)
+

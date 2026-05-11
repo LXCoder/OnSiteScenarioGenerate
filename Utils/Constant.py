@@ -44,7 +44,7 @@ MAX_ACC_DELTA = 1.0
 
 # ===== 配置 =====
 TRAIN_MODE = _get_env_bool("TESSNG_TRAIN_MODE", False)
-TOTAL_TIMESTEPS = 4000000
+TOTAL_TIMESTEPS = int(_get_env_str("TRAIN_TOTAL_TIMESTEPS", "4000000"))
 # DATA_DIR = "Data/prod"
 DATA_DIR = _get_env_str("TESSNG_DATA_DIR", "Data")
 # global filter scenes
@@ -53,9 +53,11 @@ FILTER_SCENES = _get_env_list(
     [f"scene_{i:02d}.json" for i in range(3, 12)],
 )
 
+NET_ROOT = "Data/nets"
+NET_PATH = _get_env_str("TESSNG_NET_PATH", r"Data\YYT_TJST_0619_unlimited.tess")
 # NET_PATH = r"Data\scenario_0a5c9dbc.tess"
 # NET_PATH = r"Data\scenario_0a6bf824.tess"
-NET_PATH = _get_env_str("TESSNG_NET_PATH", r"Data\YYT_TJST_0619_unlimited.tess")
+SCENE_TESS_MAPPING_PATH = _get_env_str("TESSNG_SCENE_TESS_MAPPING_PATH", "Data\map40_to_scene_names.json")
 
 
 # 车辆参数
