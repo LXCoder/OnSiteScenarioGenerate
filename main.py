@@ -156,6 +156,7 @@ def run_single():
         "__netfilepath": net_path,
         "__simuafterload": True,
         "__custsimubysteps": False,
+        "__autosave": False
     }
     plugin = MyPlugin()
     factory = TessngFactory()
