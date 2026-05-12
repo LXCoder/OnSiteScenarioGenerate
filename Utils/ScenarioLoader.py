@@ -36,7 +36,7 @@ from Utils.Constant import (
     SCENE_TESS_MAPPING_PATH,
     FILTER_SCENES,
     NET_ROOT,
-    NET_PATH
+    NET_PATH,
 )
 
 
@@ -69,10 +69,9 @@ g_scene_to_tess_mapping = _init_scene_mapping(SCENE_TESS_MAPPING_PATH)
 
 class ScenarioLoader:
     def __init__(self, dataDir: str, filter_scenes: list = []):
-        if TRAIN_MODE:
-            scene_dir = os.path.join(dataDir, "train")
-        else:
-            scene_dir = os.path.join(dataDir, "test")
+        scene_dir = dataDir
+        if USE_TEST_LOGIC:
+            scene_dir = os.path.join(dataDir, "train" if TRAIN_MODE else "test")
 
         self.dataDir = scene_dir
         self.filter_scenes = filter_scenes
@@ -81,7 +80,7 @@ class ScenarioLoader:
 
     def getNetPath(self):
         return self.net_path
-    
+
     def getScenarios(self):
         return self.scenarios
 
@@ -106,19 +105,17 @@ class ScenarioLoader:
             ]
 
         else:
-            for folder_item in os.listdir(self.dataDir):
-                scene_folder = os.path.join(self.dataDir, folder_item)
-                xodr_path, xosc_path = None, None
-                for file_item in os.listdir(scene_folder):
-                    if file_item.endswith(".xodr"):
-                        xodr_path = os.path.join(scene_folder, file_item)
+            xodr_path, xosc_path = None, None
+            for file_item in os.listdir(self.dataDir):
+                if file_item.endswith(".xodr"):
+                    xodr_path = os.path.join(self.dataDir, file_item)
 
-                    if file_item.endswith(".xosc"):
-                        xosc_path = os.path.join(scene_folder, file_item)
+                if file_item.endswith(".xosc"):
+                    xosc_path = os.path.join(self.dataDir, file_item)
 
-                    if xodr_path and xosc_path:
-                        jsonFiles.append(xosc_path)
-                        break
+                if xodr_path and xosc_path:
+                    jsonFiles.append(xosc_path)
+                    break
 
         jsonFiles = sorted(jsonFiles)
 
@@ -135,12 +132,12 @@ class ScenarioLoader:
                     msg = f"[ScenarioLoader] 未找到场景 {basename} 对应的 TESS 路网信息"
                     print(msg)
                     sys.exit(1)
-                full_net_path = os.path.join(NET_ROOT,f"{tess_info['net_name']}.tess")
+                full_net_path = os.path.join(NET_ROOT, f"{tess_info['net_name']}.tess")
                 if not os.path.exists(full_net_path):
                     sys.exit(1)
-                
+
                 self.net_path = full_net_path
-                
+
                 traj = [
                     [pos[0], -pos[1]] for pos in scenario["vehicles"]["ego"]["path"]
                 ]
@@ -200,7 +197,6 @@ class ScenarioLoader:
             包含 "net_name" 和 "type" 的字典，或 None（如果未找到）
         """
         return g_scene_to_tess_mapping.get(scene_name)
-    
+
 
 g_scenario_loader = ScenarioLoader(DATA_DIR, FILTER_SCENES)
-

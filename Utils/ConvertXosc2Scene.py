@@ -93,6 +93,9 @@ def get_smart_waypoints(points, epsilon=0.2, min_points=3):
     # 3. 如果是直线导致点数不足，进行中点插值
     # 针对你之前那种只有 2 个点的情况
     while len(simplified) < min_points:
+        if simplified[0] == simplified[-1]:  # 环路特殊处理
+            break
+        
         new_points = [simplified[0]]
         for i in range(len(simplified) - 1):
             p1 = np.array(simplified[i])

@@ -54,7 +54,7 @@ def load_batch_configs(config_path):
         missing = [
             key
             for key, value in (
-                ("NET_PATH", net_path),
+                # ("NET_PATH", net_path),
                 ("BG_MODEL_FILENAME", bg_model_filename),
                 ("DATA_DIR", data_dir),
             )
@@ -63,28 +63,46 @@ def load_batch_configs(config_path):
         if missing:
             raise ValueError(f"第 {index} 项缺少必填字段: {', '.join(missing)}")
 
-        normalized.append(
-            {
-                "name": item.get("name", f"scenario_{index:03d}"),
-                "NET_PATH": net_path,
-                "BG_MODEL_FILENAME": bg_model_filename,
-                "DATA_DIR": data_dir,
-                "EGO_MODEL_FILENAME": item.get("EGO_MODEL_FILENAME"),
-                "FILTER_SCENES": item.get("FILTER_SCENES"),
-                "USE_TEST_LOGIC": item.get("USE_TEST_LOGIC"),
-                "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
-                "TRAIN_MODE": item.get("TRAIN_MODE"),
-            }
-        )
+        is_use_test_logic = item.get("USE_TEST_LOGIC", False)
+        if is_use_test_logic:
+            normalized.append(
+                {
+                    "name": item.get("name", f"scenario_{index:03d}"),
+                    "NET_PATH": net_path,
+                    "BG_MODEL_FILENAME": bg_model_filename,
+                    "DATA_DIR": data_dir,
+                    "EGO_MODEL_FILENAME": item.get("EGO_MODEL_FILENAME"),
+                    "FILTER_SCENES": item.get("FILTER_SCENES"),
+                    "USE_TEST_LOGIC": is_use_test_logic,
+                    "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
+                    "TRAIN_MODE": item.get("TRAIN_MODE"),
+                }
+            )
+        else:
+            for file_item in os.listdir(data_dir):
+                normalized.append(
+                    {
+                        "name": item.get("name", f"scenario_{index:03d}_{sub_idx:03d}"),
+                        "BG_MODEL_FILENAME": bg_model_filename,
+                        "DATA_DIR": os.path.join(data_dir, file_item),
+                        "EGO_MODEL_FILENAME": item.get("EGO_MODEL_FILENAME"),
+                        "FILTER_SCENES": item.get("FILTER_SCENES"),
+                        "USE_TEST_LOGIC": is_use_test_logic,
+                        "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
+                        "TRAIN_MODE": item.get("TRAIN_MODE"),
+                    }
+                )
 
     return normalized
 
 
 def apply_batch_env(env, config):
-    env["TESSNG_NET_PATH"] = str(config["NET_PATH"])
     env["TESSNG_BG_MODEL_FILENAME"] = str(config["BG_MODEL_FILENAME"])
     env["TESSNG_DATA_DIR"] = str(config["DATA_DIR"])
     env["TESSNG_EXIT_ON_SIMULATION_STOP"] = "1"
+
+    if "NET_PATH" in config:
+        env["TESSNG_NET_PATH"] = str(config["NET_PATH"])
 
     if config.get("EGO_MODEL_FILENAME"):
         env["TESSNG_EGO_MODEL_FILENAME"] = str(config["EGO_MODEL_FILENAME"])
@@ -100,7 +118,7 @@ def apply_batch_env(env, config):
         ).lower()
     if config.get("TRAIN_MODE") is not None:
         env["TESSNG_TRAIN_MODE"] = str(config["TRAIN_MODE"]).lower()
-    
+
     if config.get("TRAIN_TOTAL_TIMESTEPS") is not None:
         env["TRAIN_TOTAL_TIMESTEPS"] = str(config["TRAIN_TOTAL_TIMESTEPS"])
 
@@ -118,7 +136,7 @@ def run_batch(config_path):
     for index, config in enumerate(configs, start=1):
         print("=" * 80)
         print(f"[批量] 开始第 {index}/{total} 个任务: {config['name']}")
-        print(f"[批量]   NET_PATH={config['NET_PATH']}")
+        # print(f"[批量]   NET_PATH={config['NET_PATH']}")
         print(f"[批量]   BG_MODEL_FILENAME={config['BG_MODEL_FILENAME']}")
         print(f"[批量]   DATA_DIR={config['DATA_DIR']}")
 
@@ -148,7 +166,7 @@ def run_single():
     from Utils.Constant import NET_PATH
 
     app = QApplication()
-    
+
     net_path = g_scenario_loader.getNetPath()
     print(f"[单次] 启动仿真，NET_PATH={net_path}")
     config = {
@@ -156,7 +174,7 @@ def run_single():
         "__netfilepath": net_path,
         "__simuafterload": True,
         "__custsimubysteps": False,
-        "__autosave": False
+        "__autosave": False,
     }
     plugin = MyPlugin()
     factory = TessngFactory()
