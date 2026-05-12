@@ -1,7 +1,7 @@
 [
   {
     "name": "test-scene-a",
-    "NET_PATH": "Data/scenario_0a6bf824.tess",
+    "NET_PATH": "Data/YYT_TJST_0619_unlimited.tess",
     "BG_MODEL_FILENAME": "model.zip.v6",
     "DATA_DIR": "Data",
     "FILTER_SCENES": [
@@ -12,9 +12,9 @@
   },
   {
     "name": "prod-scene-b",
-    "NET_PATH": "Data/YYT_TJST_0619_unlimited.tess",
-    "BG_MODEL_FILENAME": "model.zip.v7",
-    "DATA_DIR": "Data/prod",
-    "USE_TEST_LOGIC": false
+    "BG_MODEL_FILENAME": "model.zip.v6",
+    "DATA_DIR": "Data/prod/select",
+    "USE_TEST_LOGIC": false,
+    "REPEAT_SINGLE_SCENARIO": false
   }
 ]
