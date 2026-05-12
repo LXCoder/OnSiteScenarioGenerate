@@ -130,7 +130,7 @@ class MultiVehicleInference:
         )
 
         # 初始位置和航向
-        agent.x, agent.y, agent.heading = self._posOnPath(smoothed, 0.0)
+        agent.x, agent.y, agent.heading = posOnPath(smoothed, 0.0)
         agent.prevHeading = agent.heading
 
         self.agents[name] = agent
@@ -228,7 +228,7 @@ class MultiVehicleInference:
                 agent.alive = False
 
             # 6. 定位 (不再强制从路径读取坐标)
-            # x, y, heading = self._posOnPath(agent.smoothedPath, agent.progress)
+            # x, y, heading = posOnPath(agent.smoothedPath, agent.progress)
             # agent.x = x
             # agent.y = y
             # agent.heading = heading
@@ -262,7 +262,7 @@ class MultiVehicleInference:
             agent.speed = speed
             agent.progress = 0.0
             agent.alive = True
-            agent.x, agent.y, agent.heading = self._posOnPath(agent.smoothedPath, 0.0)
+            agent.x, agent.y, agent.heading = posOnPath(agent.smoothedPath, 0.0)
             agent.prevHeading = agent.heading
             if name.endswith("_ego") or name == "ego":
                 print(f"[MultiInfer] 重置 '{name}' 到起点: x={agent.x:.1f}, y={agent.y:.1f}, heading={agent.heading:.1f}")
@@ -356,7 +356,9 @@ class MultiVehicleInference:
     # ============================================================
 
     def _posOnPath(self, path, dist) -> Tuple[float, float, float]:
-        """返回 (x, y, heading_tessng_deg)  JSON坐标(y=-gui_y)"""
+        """返回 (x, y, heading_tessng_deg)  JSON坐标(y=-gui_y)
+        废弃：改用全局函数 posOnPath()
+        """
         accumulated = 0.0
         for i in range(len(path) - 1):
             ax, ay = path[i]
@@ -436,3 +438,51 @@ class MultiVehicleInference:
                 acc = 0.0
             acc += remaining
         return result
+    
+def posOnPath(smoothed, dist):
+    """
+    在平滑路径上定位（鲁棒版）
+    """
+    # 1. 极度防御：如果列表为空
+    if not smoothed:
+        return 0.0, 0.0, 0.0
+
+    # 2. 如果只有一个点，无法计算位移和航向，直接返回该点坐标和默认航向
+    if len(smoothed) < 2:
+        return smoothed[0][0], smoothed[0][1], 0.0
+
+    accumulated = 0.0
+    # 遍历线段
+    for i in range(len(smoothed) - 1):
+        (ax, ay), (bx, by) = smoothed[i], smoothed[i + 1]
+        dx, dy = bx - ax, by - ay
+        segLen = math.sqrt(dx**2 + dy**2)
+        
+        if accumulated + segLen >= dist:
+            # 如果线段长度极小（两点重合），ratio 设为 0
+            if segLen < 1e-8:
+                return ax, ay, 0.0 # 或者传入当前航向
+            
+            ratio = (dist - accumulated) / segLen
+            x = ax + ratio * dx
+            y = ay + ratio * dy
+            # 计算航向
+            heading = math.degrees(math.atan2(dx, dy)) % 360.0
+            return x, y, heading
+        
+        accumulated += segLen
+
+    # 3. 如果 dist 超过了总长度，或者路径是由两个完全重合的点组成的
+    # 此时处理最后两个点
+    bx, by = smoothed[-1]
+    ax, ay = smoothed[-2]
+    dx, dy = bx - ax, by - ay
+    segLen = math.sqrt(dx**2 + dy**2)
+
+    # 针对“两个点完全一样”：
+    if segLen < 1e-8:
+        # 如果最后两个点也重合，航向角无法计算，给 0.0 或保持不变
+        return bx, by, 0.0
+    
+    heading = math.degrees(math.atan2(dx, dy)) % 360.0
+    return bx, by, heading

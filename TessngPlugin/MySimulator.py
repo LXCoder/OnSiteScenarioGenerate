@@ -24,7 +24,7 @@ from Utils.NavigationCalculator import NavigationCalculator
 from Utils.SurroundingCalculator import SurroundingCalculator
 from Utils.YawRateCalculator import YawRateCalculator
 from Utils.ScenarioLoader import g_scenario_loader
-from MultiVehicleInference import MultiVehicleInference
+from MultiVehicleInference import MultiVehicleInference, posOnPath
 from Utils.Constant import (
     WHEEL_BASE,
     MAX_LANE_WIDTH,
@@ -193,13 +193,14 @@ class MySimulator(QObject, PyCustomerSimulator):
             pass
         else:
             # ===== 普通模式：由选手代码控制 =====
-            states = self.playerManager.step_all()
-            self.tessAuto.setAvChannel2AvMsgMap(states)
-            for name, state in states.items():
-                self.egoState = state
-                self.egoName = name
-                break
-            self.tessAuto.vehicleCreate()
+            # states = self.playerManager.step_all()
+            # self.tessAuto.setAvChannel2AvMsgMap(states)
+            # for name, state in states.items():
+            #     self.egoState = state
+            #     self.egoName = name
+            #     break
+            # self.tessAuto.vehicleCreate()
+            pass
 
     def _updateEgoByRL(self):
         """根据 RL 输出的 currentControl (accel, steer) 更新 egoState"""
@@ -210,7 +211,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 if self.egoSmoothedPath
                 else (-650.047, -287.819)
             )
-            _, _, init_heading_math = self._posOnPath(self.egoSmoothedPath, 0.0)
+            _, _, init_heading_math = posOnPath(self.egoSmoothedPath, 0.0)
 
             # _posOnPath 返回的是基于数学坐标 (Y向北) 的 atan2(dx, dy) 角度
             # 我们需要将其转换为 TESSNG 坐标系 (Y向南，北0顺时针) 下的航向角
@@ -469,7 +470,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             init_x, init_y = (
                 self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
             )
-            _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
+            _, _, init_heading = posOnPath(self.egoSmoothedPath, 0.0)
             initial_speed = getattr(self, "_ego_target_speed", 15.0)
             self.egoState = VehicleState(
                 x=init_x, y=init_y, heading=init_heading, speed=initial_speed
@@ -483,7 +484,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     self.createTessngBgVehicle(name, agent)
                     continue
 
-                x, y, heading = self._posOnPath(agent["smoothed"], 0.0)
+                x, y, heading = posOnPath(agent["smoothed"], 0.0)
                 agent["state"] = VehicleState(
                     x=x, y=y, heading=heading, speed=agent["speed"]
                 )
@@ -807,7 +808,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     if self.egoSmoothedPath
                     else (-650.0, -287.0)
                 )
-                _, _, init_heading = self._posOnPath(self.egoSmoothedPath, 0.0)
+                _, _, init_heading = posOnPath(self.egoSmoothedPath, 0.0)
                 self.egoState.x, self.egoState.y, self.egoState.heading = (
                     init_x,
                     init_y,
@@ -881,7 +882,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             # ===== NPC 模式：路径跟随 =====
             agent["progress"] += agent["speed"] * self.dt
             agent["progress"] = min(agent["progress"], agent["totalLength"])
-            x, y, heading = self._posOnPath(s, agent["progress"])
+            x, y, heading = posOnPath(s, agent["progress"])
             agent["x"], agent["y"], agent["heading"] = x, y, heading
             vsMap[name] = VehicleState(x=x, y=y, heading=heading, speed=agent["speed"])
 
@@ -1328,7 +1329,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             (p2m(actual_x) - p2m(ego.x)) ** 2 + (p2m(actual_y) - p2m(ego.y)) ** 2
         )
 
-        real_x, real_y, expected_heading = self._posOnPath(
+        real_x, real_y, expected_heading = posOnPath(
             agent["smoothed"], agent["progress"]
         )
 
@@ -1693,6 +1694,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         JSON 坐标约定：x 同 GUI，y = -GUI_y
         Tessng 航向角：正北0°顺时针，基于 GUI 坐标（y 向下）
         转换：heading = atan2(dx, -dy_gui)
+        废弃：改用 MultiVehicleInference 模块下的全局函数 posOnPath()
         """
         accumulated = 0.0
         for i in range(len(smoothed) - 1):
