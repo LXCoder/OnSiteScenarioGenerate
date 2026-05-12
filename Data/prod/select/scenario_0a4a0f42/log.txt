@@ -1,0 +1,256 @@
+esmini GIT REV: v3.0.1-0-edd82328
+esmini GIT TAG: v3.0.1
+esmini GIT BRANCH: tags/v3.0.1^0
+esmini BUILD VERSION: 6063
+[] [info] Loaded scenario_0a4a0f42.xosc
+[2026-04-15 15:43:48]
+[] [info] Player options: --osc scenario_0a4a0f42.xosc --bounding_boxes --camera_mode orbit --csv_logger log.csv --ground_plane auto --info_text 1 --logfile_path log.txt --log_level info --text_scale 1.0 --traj_filter 0.1 
+[] [info] No fixed timestep specified - running in realtime speed
+[] [info] Generated seed 2785695224
+[] [info] Loading scenario_0a4a0f42.xosc (v1.0)
+[] [info] 0 variables
+[] [info] Loaded OpenDRIVE: scenario_0a4a0f42.xodr
+[] [info] 3D model search paths attempted for file car_white.osgb:
+[] [info]   car_white.osgb
+[] [info]   .//./car_white.osgb
+[] [info]   .//../resources/models//./car_white.osgb
+[] [info]   .//../models/./car_white.osgb
+[] [warn] 3D model car_white.osgb not located, using specified file path
+[] [info] Assigned 3D model car_white.osgb to vehicle Default_car
+[] [info] Add and deactivate new object "Ego" (id 0)
+[] [info] 3D model search paths attempted for file car_red.osgb:
+[] [info]   car_red.osgb
+[] [info]   .//./car_red.osgb
+[] [info]   .//../resources/models//./car_red.osgb
+[] [info]   .//../models/./car_red.osgb
+[] [warn] 3D model car_red.osgb not located, using specified file path
+[] [info] Assigned 3D model car_red.osgb to vehicle Default_car
+[] [info] Add and deactivate new object "A1" (id 1)
+[] [info] 3D model search paths attempted for file car_red.osgb:
+[] [info]   car_red.osgb
+[] [info]   .//./car_red.osgb
+[] [info]   .//../resources/models//./car_red.osgb
+[] [info]   .//../models/./car_red.osgb
+[] [warn] 3D model car_red.osgb not located, using specified file path
+[] [info] Assigned 3D model car_red.osgb to vehicle Default_car
+[] [info] Add and deactivate new object "A2" (id 2)
+[] [info] 3D model search paths attempted for file car_red.osgb:
+[] [info]   car_red.osgb
+[] [info]   .//./car_red.osgb
+[] [info]   .//../resources/models//./car_red.osgb
+[] [info]   .//../models/./car_red.osgb
+[] [warn] 3D model car_red.osgb not located, using specified file path
+[] [info] Assigned 3D model car_red.osgb to vehicle Default_car
+[] [info] Add and deactivate new object "A3" (id 3)
+[] [info] 3D model search paths attempted for file car_red.osgb:
+[] [info]   car_red.osgb
+[] [info]   .//./car_red.osgb
+[] [info]   .//../resources/models//./car_red.osgb
+[] [info]   .//../models/./car_red.osgb
+[] [warn] 3D model car_red.osgb not located, using specified file path
+[] [info] Assigned 3D model car_red.osgb to vehicle Default_car
+[] [info] Add and deactivate new object "A4" (id 4)
+[] [info] 3D model search paths attempted for file car_red.osgb:
+[] [info]   car_red.osgb
+[] [info]   .//./car_red.osgb
+[] [info]   .//../resources/models//./car_red.osgb
+[] [info]   .//../models/./car_red.osgb
+[] [warn] 3D model car_red.osgb not located, using specified file path
+[] [info] Assigned 3D model car_red.osgb to vehicle Default_car
+[] [info] Add and deactivate new object "A5" (id 5)
+[] [info] Parsing global action EnvironmentAction
+[] [warn] cloudState is deprecated in v1.2. Use fractionalCloudCover instead, Accepting it anyway.
+[] [warn] In Precipitation, intensity is deprecated in v1.1. Use precipitationIntensity instead, Accepting it anyway.
+[] [info] 0 parameters
+[0.000] [info] Log all vehicle data in csv file
+[0.000] [info] Init EnvironmentAction initState -> startTransition -> runningState
+[0.000] [info] Init A1 LongitudinalAction initState -> startTransition -> runningState
+[0.000] [info] Init A1 TeleportAction initState -> startTransition -> runningState
+[0.000] [info] Starting teleport Action
+[0.000] [info] A1 New position:
+[0.000] [info] Pos(146.00, -13.16, 0.00) Rot(0.00, 0.00, 0.00) roadId 1 laneId -4 s 2146.00 offset -0.28 t -13.16
+[0.000] [info] Init A2 LongitudinalAction initState -> startTransition -> runningState
+[0.000] [info] Init A2 TeleportAction initState -> startTransition -> runningState
+[0.000] [info] Starting teleport Action
+[0.000] [info] A2 New position:
+[0.000] [info] Pos(38.64, -12.97, 0.00) Rot(0.00, 0.00, 0.00) roadId 1 laneId -4 s 2038.64 offset -0.09 t -12.97
+[0.000] [info] Init A3 LongitudinalAction initState -> startTransition -> runningState
+[0.000] [info] Init A3 TeleportAction initState -> startTransition -> runningState
+[0.000] [info] Starting teleport Action
+[0.000] [info] A3 New position:
+[0.000] [info] Pos(31.82, -8.61, 0.00) Rot(0.01, 0.00, 0.00) roadId 1 laneId -3 s 2031.82 offset 0.30 t -8.61
+[0.000] [info] Init A4 LongitudinalAction initState -> startTransition -> runningState
+[0.000] [info] Init A4 TeleportAction initState -> startTransition -> runningState
+[0.000] [info] Starting teleport Action
+[0.000] [info] A4 New position:
+[0.000] [info] Pos(-43.89, -8.46, 0.00) Rot(0.00, 0.00, 0.00) roadId 1 laneId -3 s 1956.11 offset 0.44 t -8.47
+[0.000] [info] Init A5 LongitudinalAction initState -> startTransition -> runningState
+[0.000] [info] Init A5 TeleportAction initState -> startTransition -> runningState
+[0.000] [info] Starting teleport Action
+[0.000] [info] A5 New position:
+[0.000] [info] Pos(-65.99, -5.17, 0.00) Rot(0.00, 0.00, 0.00) roadId 1 laneId -2 s 1934.01 offset -0.28 t -5.17
+[0.000] [info] storyBoard initState -> startTransition -> runningState
+[0.000] [info] Cutin initState -> startTransition -> runningState
+[0.000] [info] Act_A1 initState -> initToStandbyTransition -> standbyState
+[0.000] [info] Act_A2 initState -> initToStandbyTransition -> standbyState
+[0.000] [info] Act_A3 initState -> initToStandbyTransition -> standbyState
+[0.000] [info] Act_A4 initState -> initToStandbyTransition -> standbyState
+[0.000] [info] Act_A5 initState -> initToStandbyTransition -> standbyState
+[0.000] [info] Act_Ego initState -> initToStandbyTransition -> standbyState
+[0.000] [info] Init EnvironmentAction runningState -> stopTransition -> completeState
+[0.000] [info] Init A1 LongitudinalAction runningState -> endTransition -> completeState
+[0.000] [info] Init A1 TeleportAction runningState -> endTransition -> completeState
+[0.000] [info] Init A2 LongitudinalAction runningState -> endTransition -> completeState
+[0.000] [info] Init A2 TeleportAction runningState -> endTransition -> completeState
+[0.000] [info] Init A3 LongitudinalAction runningState -> endTransition -> completeState
+[0.000] [info] Init A3 TeleportAction runningState -> endTransition -> completeState
+[0.000] [info] Init A4 LongitudinalAction runningState -> endTransition -> completeState
+[0.000] [info] Init A4 TeleportAction runningState -> endTransition -> completeState
+[0.000] [info] Init A5 LongitudinalAction runningState -> endTransition -> completeState
+[0.000] [info] Init A5 TeleportAction runningState -> endTransition -> completeState
+[0.001] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0010 > 0.0000, edge: rising
+[0.001] [info] Trigger /------------------------------------------------
+[0.001] [info] Group 0:
+[0.001] [info] no name SimulationTimeCondition: true
+[0.001] [info] Trigger  ------------------------------------------------/
+[0.001] [info] Act_A1 standbyState -> startTransition -> runningState
+[0.001] [info] Squence_A1 initState -> startTransition -> runningState
+[0.001] [info] Maneuver1 initState -> startTransition -> runningState
+[0.001] [info] Event1 initState -> initToStandbyTransition -> standbyState
+[0.001] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0010 > 0.0000, edge: rising
+[0.001] [info] Trigger /------------------------------------------------
+[0.001] [info] Group 0:
+[0.001] [info] no name SimulationTimeCondition: true
+[0.001] [info] Trigger  ------------------------------------------------/
+[0.001] [info] Act_A2 standbyState -> startTransition -> runningState
+[0.001] [info] Squence_A2 initState -> startTransition -> runningState
+[0.001] [info] Maneuver1 initState -> startTransition -> runningState
+[0.001] [info] Event1 initState -> initToStandbyTransition -> standbyState
+[0.001] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0010 > 0.0000, edge: rising
+[0.001] [info] Trigger /------------------------------------------------
+[0.001] [info] Group 0:
+[0.001] [info] no name SimulationTimeCondition: true
+[0.001] [info] Trigger  ------------------------------------------------/
+[0.001] [info] Act_A3 standbyState -> startTransition -> runningState
+[0.001] [info] Squence_A3 initState -> startTransition -> runningState
+[0.001] [info] Maneuver1 initState -> startTransition -> runningState
+[0.001] [info] Event1 initState -> initToStandbyTransition -> standbyState
+[0.001] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0010 > 0.0000, edge: rising
+[0.001] [info] Trigger /------------------------------------------------
+[0.001] [info] Group 0:
+[0.001] [info] no name SimulationTimeCondition: true
+[0.001] [info] Trigger  ------------------------------------------------/
+[0.001] [info] Act_A4 standbyState -> startTransition -> runningState
+[0.001] [info] Squence_A4 initState -> startTransition -> runningState
+[0.001] [info] Maneuver1 initState -> startTransition -> runningState
+[0.001] [info] Event1 initState -> initToStandbyTransition -> standbyState
+[0.001] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0010 > 0.0000, edge: rising
+[0.001] [info] Trigger /------------------------------------------------
+[0.001] [info] Group 0:
+[0.001] [info] no name SimulationTimeCondition: true
+[0.001] [info] Trigger  ------------------------------------------------/
+[0.001] [info] Act_A5 standbyState -> startTransition -> runningState
+[0.001] [info] Squence_A5 initState -> startTransition -> runningState
+[0.001] [info] Maneuver1 initState -> startTransition -> runningState
+[0.001] [info] Event1 initState -> initToStandbyTransition -> standbyState
+[0.001] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0010 > 0.0000, edge: none
+[0.001] [info] Trigger /------------------------------------------------
+[0.001] [info] Group 0:
+[0.001] [info] no name SimulationTimeCondition: true
+[0.001] [info] Trigger  ------------------------------------------------/
+[0.001] [info] Act_Ego standbyState -> startTransition -> runningState
+[0.001] [info] Squence_Ego initState -> startTransition -> runningState
+[0.001] [info] Maneuver1 initState -> startTransition -> runningState
+[0.001] [info] Event1 initState -> initToStandbyTransition -> standbyState
+[0.001] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0010 > 0.0000, edge: none
+[0.001] [info] Trigger /------------------------------------------------
+[0.001] [info] Group 0:
+[0.001] [info] no name SimulationTimeCondition: true
+[0.001] [info] Trigger  ------------------------------------------------/
+[0.001] [info] Event1 standbyState -> startTransition -> runningState
+[0.001] [info] Action1 initState -> startTransition -> runningState
+[0.031] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0306 > 0.0300, edge: none
+[0.031] [info] Trigger /------------------------------------------------
+[0.031] [info] Group 0:
+[0.031] [info] no name SimulationTimeCondition: true
+[0.031] [info] Trigger  ------------------------------------------------/
+[0.031] [info] Event1 standbyState -> startTransition -> runningState
+[0.031] [info] Action1 initState -> startTransition -> runningState
+[0.031] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0306 > 0.0300, edge: none
+[0.031] [info] Trigger /------------------------------------------------
+[0.031] [info] Group 0:
+[0.031] [info] no name SimulationTimeCondition: true
+[0.031] [info] Trigger  ------------------------------------------------/
+[0.031] [info] Event1 standbyState -> startTransition -> runningState
+[0.031] [info] Action1 initState -> startTransition -> runningState
+[0.031] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0306 > 0.0300, edge: none
+[0.031] [info] Trigger /------------------------------------------------
+[0.031] [info] Group 0:
+[0.031] [info] no name SimulationTimeCondition: true
+[0.031] [info] Trigger  ------------------------------------------------/
+[0.031] [info] Event1 standbyState -> startTransition -> runningState
+[0.031] [info] Action1 initState -> startTransition -> runningState
+[0.031] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0306 > 0.0300, edge: none
+[0.031] [info] Trigger /------------------------------------------------
+[0.031] [info] Group 0:
+[0.031] [info] no name SimulationTimeCondition: true
+[0.031] [info] Trigger  ------------------------------------------------/
+[0.031] [info] Event1 standbyState -> startTransition -> runningState
+[0.031] [info] Action1 initState -> startTransition -> runningState
+[0.031] [info] no name SimulationTimeCondition: true, delay: 0.00, 0.0306 > 0.0300, edge: none
+[0.031] [info] Trigger /------------------------------------------------
+[0.031] [info] Group 0:
+[0.031] [info] no name SimulationTimeCondition: true
+[0.031] [info] Trigger  ------------------------------------------------/
+[0.031] [info] Event1 standbyState -> startTransition -> runningState
+[0.031] [info] Action1 initState -> startTransition -> runningState
+[2.999] [info] Action1 runningState -> endTransition -> completeState
+[2.999] [info] Event1 complete after 1 execution
+[2.999] [info] Event1 runningState -> endTransition -> completeState
+[2.999] [info] Maneuver1 runningState -> endTransition -> completeState
+[2.999] [info] Squence_Ego complete after 1 execution
+[2.999] [info] Squence_Ego runningState -> endTransition -> completeState
+[2.999] [info] Act_Ego runningState -> endTransition -> completeState
+[5.000] [info] Action1 runningState -> endTransition -> completeState
+[5.000] [info] Event1 complete after 1 execution
+[5.000] [info] Event1 runningState -> endTransition -> completeState
+[5.000] [info] Maneuver1 runningState -> endTransition -> completeState
+[5.000] [info] Squence_A1 complete after 1 execution
+[5.000] [info] Squence_A1 runningState -> endTransition -> completeState
+[5.000] [info] Act_A1 runningState -> endTransition -> completeState
+[5.000] [info] Action1 runningState -> endTransition -> completeState
+[5.000] [info] Event1 complete after 1 execution
+[5.000] [info] Event1 runningState -> endTransition -> completeState
+[5.000] [info] Maneuver1 runningState -> endTransition -> completeState
+[5.000] [info] Squence_A2 complete after 1 execution
+[5.000] [info] Squence_A2 runningState -> endTransition -> completeState
+[5.000] [info] Act_A2 runningState -> endTransition -> completeState
+[5.000] [info] Action1 runningState -> endTransition -> completeState
+[5.000] [info] Event1 complete after 1 execution
+[5.000] [info] Event1 runningState -> endTransition -> completeState
+[5.000] [info] Maneuver1 runningState -> endTransition -> completeState
+[5.000] [info] Squence_A3 complete after 1 execution
+[5.000] [info] Squence_A3 runningState -> endTransition -> completeState
+[5.000] [info] Act_A3 runningState -> endTransition -> completeState
+[5.000] [info] Action1 runningState -> endTransition -> completeState
+[5.000] [info] Event1 complete after 1 execution
+[5.000] [info] Event1 runningState -> endTransition -> completeState
+[5.000] [info] Maneuver1 runningState -> endTransition -> completeState
+[5.000] [info] Squence_A4 complete after 1 execution
+[5.000] [info] Squence_A4 runningState -> endTransition -> completeState
+[5.000] [info] Act_A4 runningState -> endTransition -> completeState
+[5.000] [info] Action1 runningState -> endTransition -> completeState
+[5.000] [info] Event1 complete after 1 execution
+[5.000] [info] Event1 runningState -> endTransition -> completeState
+[5.000] [info] Maneuver1 runningState -> endTransition -> completeState
+[5.000] [info] Squence_A5 complete after 1 execution
+[5.000] [info] Squence_A5 runningState -> endTransition -> completeState
+[5.000] [info] Act_A5 runningState -> endTransition -> completeState
+[5.000] [info] Cutin runningState -> endTransition -> completeState
+[5.026] [info] no name SimulationTimeCondition: true, delay: 0.00, 5.0256 > 5.0250, edge: rising
+[5.026] [info] Trigger /------------------------------------------------
+[5.026] [info] Group 0:
+[5.026] [info] no name SimulationTimeCondition: true
+[5.026] [info] Trigger  ------------------------------------------------/
+[5.026] [info] storyBoard runningState -> stopTransition -> completeState
+[5.026] [info] Closing
