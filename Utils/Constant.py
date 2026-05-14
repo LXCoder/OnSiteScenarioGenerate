@@ -56,7 +56,7 @@ NET_ROOT = "Data/nets"
 NET_PATH = _get_env_str("TESSNG_NET_PATH", r"Data\YYT_TJST_0619_unlimited.tess")
 # NET_PATH = r"Data\scenario_0a5c9dbc.tess"
 # NET_PATH = r"Data\scenario_0a6bf824.tess"
-SCENE_TESS_MAPPING_PATH = _get_env_str("TESSNG_SCENE_TESS_MAPPING_PATH", "Data\map40_to_scene_names.json")
+SCENE_TESS_MAPPING_PATH = _get_env_str("TESSNG_SCENE_TESS_MAPPING_PATH", "Data/map40_to_scene_names.json")
 
 
 # 车辆参数
@@ -73,7 +73,7 @@ TRAIN_MAX_STEPS = 1000
 # 是否使用测试用的场景文件加载逻辑
 USE_TEST_LOGIC = _get_env_bool("TESSNG_USE_TEST_LOGIC", False)
 # 设定open scenario的起始时间阈值（秒）
-START_TIME_THRESHOLD = 1.0
+START_TIME_THRESHOLD = 3.0
 
 # 是否单一场景重复执行
 REPEAT_SINGLE_SCENARIO = _get_env_bool("TESSNG_REPEAT_SINGLE_SCENARIO", False)

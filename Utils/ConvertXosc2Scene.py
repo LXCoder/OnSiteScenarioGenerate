@@ -2,6 +2,7 @@ import os
 import xml.etree.ElementTree as ET
 import json
 import math
+import re
 import random
 import numpy as np
 from glob import glob
@@ -111,16 +112,72 @@ def get_smart_waypoints(points, epsilon=0.2, min_points=3):
     return simplified
 
 
+def _parse_ego_comment_info(root):
+    """解析 Ego 节点注释中的初始化和任务信息"""
+    ego_info = {}
+    # 查找 entityRef 为 Ego 的 Private 节点
+    for private in root.iter("Private"):
+        if private.get("entityRef") == "Ego":
+            # 获取该节点下的所有注释
+            # ElementTree 解析注释比较特殊，可以通过迭代子节点寻找
+            for node in list(private.iter()):
+                # 在某些 Python 版本中，注释可以通过特定方式获取
+                pass # ET 直接获取注释较难，我们直接读取原始文本正则匹配更稳妥
+    
+    # 备选方案：直接在 root 级别寻找注释内容（因为注释是 Private 的子节点）
+    # 这里使用一种简单有效的手段：直接搜索 XML 树中的所有 Comment 节点
+    import xml.etree.ElementTree as ET
+    
+    # 重新查找 Private Ego 节点
+    for private in root.findall(".//Private[@entityRef='Ego']"):
+        # 提取该节点范围内的所有文本内容（包括注释）
+        # 注意：标准 ET 库默认忽略注释。我们需要寻找 Private 节点位置并手动解析
+        pass
+
+    return ego_info
+
 def parse_xosc(file_path):
     """解析单个 xosc 文件并确保 ego 在 JSON 顶端"""
     try:
         tree = ET.parse(file_path)
         root = tree.getroot()
+
+        # 增加：读取原始文件内容用于正则匹配注释（ET 处理注释较弱）
+        with open(file_path, 'r', encoding='utf-8') as f:
+            raw_content = f.read()
     except Exception as e:
         print(f"Error parsing {file_path}: {e}")
         return None
 
     all_vehicles = {}
+
+    ego_task = {}
+    # 提取 v_init, x_init, y_init, heading_init
+    init_match = re.search(r"\[Initial State\] v_init = (.*?), x_init = (.*?), y_init = (.*?), heading_init = (.*?)-", raw_content)
+    if init_match:
+        ego_task["initial_state"] = {
+            "v": float(init_match.group(1).strip(', ')),
+            "x": float(init_match.group(2).strip(', ')),
+            "y": float(init_match.group(3).strip(', ')),
+            "heading": float(init_match.group(4).strip(', '))
+        }
+
+    # 提取 x_target, y_target 范围
+    target_match = re.search(r"\[Driving Task\] x_target = \((.*?)\), y_target = \((.*?)\)", raw_content)
+    if target_match:
+        x_range = [float(x) for x in target_match.group(1).split(',')]
+        y_range = [float(y) for y in target_match.group(2).split(',')]
+        ego_task["driving_task"] = {
+            "x_target": x_range,
+            "y_target": y_range,
+            "target_center": [(x_range[0]+x_range[1])/2, (y_range[0]+y_range[1])/2]
+        }
+
+    stop_trigger = root.find(".//StopTrigger//SimulationTimeCondition")
+    if stop_trigger is not None:
+        ego_task["timeout"] = float(stop_trigger.get("value"))
+    else:
+        ego_task["timeout"] = None
 
     # 1. 遍历所有轨迹节点提取数据
     for maneuver_group in root.iter("ManeuverGroup"):
@@ -152,6 +209,8 @@ def parse_xosc(file_path):
                     "color": "#14c704" if is_ego else "#3498db",
                     "control": "model",
                 }
+                if is_ego:
+                    all_vehicles[vehicle_key]["info"] = ego_task
 
     if not all_vehicles:
         return None
@@ -180,7 +239,7 @@ def parse_xosc(file_path):
 
 
 def main():
-    input_dir = "Data/select800"
+    input_dir = "Data/prod/select/scenario_0ace9a1d"
     output_dir = "Data/converted_scenes"
 
     os.makedirs(output_dir, exist_ok=True)
