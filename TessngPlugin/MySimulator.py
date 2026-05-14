@@ -423,7 +423,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         try:
             x_min, x_max = sorted(float(v) for v in x_target[:2])
-            y_min, y_max = sorted(-float(v) for v in y_target[:2])
+            y_min, y_max = sorted(float(v) for v in y_target[:2])
         except (TypeError, ValueError):
             return None
 
@@ -451,7 +451,6 @@ class MySimulator(QObject, PyCustomerSimulator):
         ego_pos = egoVehicle.pos()
         ego_x = p2m(ego_pos.x())
         ego_y = -p2m(ego_pos.y())
-
         return x_min <= ego_x <= x_max and y_min <= ego_y <= y_max
 
     def checkEgoDone(self, egoVehicle) -> bool:
@@ -638,7 +637,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._is_timeout = False
         simIface = self.simIface or tessngIFace().simuInterface()
         current_simu_time = simIface.simuTimeIntervalWithAcceMutiples()
-        if current_simu_time > self._egoInfo["info"]["timeout"]:
+        if self._egoInfo["info"] and current_simu_time > self._egoInfo["info"]["timeout"]:
             self._is_timeout = True
 
         # 碰撞检测
