@@ -1,11 +1,10 @@
-
-
 import math
 import os
 import threading
 import numpy as np
-
-from PySide2.QtCore import QObject, QPointF, Signal,QCoreApplication
+from enum import Enum
+from scipy.interpolate import splev, splprep
+from PySide2.QtCore import QObject, QPointF, Signal, QCoreApplication
 
 from Tessng import (
     Online,
@@ -41,11 +40,19 @@ from Utils.Constant import (
     MAX_ACC_DELTA,
     MAX_STEER_DELTA,
     REPEAT_SINGLE_SCENARIO,
-    EXIT_ON_SIMULATION_STOP
+    EXIT_ON_SIMULATION_STOP,
 )
 
 
 class MySimulator(QObject, PyCustomerSimulator):
+    class EgoStatus(Enum):
+        IDLE = 0
+        ARRIVED = 1
+        TIMEOUT = 2
+        COLLISION = 3
+        OUTBOUND = 4
+        DEVIATE_LANE = 5
+
     sig_stop_simu = Signal()
 
     def __init__(self):
@@ -116,6 +123,17 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.egoModel = None
         self.bgModel = None
 
+        # 主车结束状态
+        self.egoFinishStatus = self.EgoStatus.IDLE
+        self.EGO_STATUS_REASON = {
+            self.EgoStatus.IDLE: "IDLE",
+            self.EgoStatus.ARRIVED: "到达目标区域",
+            self.EgoStatus.TIMEOUT: "超时",
+            self.EgoStatus.COLLISION: "与背景车发生碰撞",
+            self.EgoStatus.OUTBOUND: "驶出地图边界",
+            self.EgoStatus.DEVIATE_LANE: "偏离车道",
+        }
+
     # ============================================================
     #  Tessng 生命周期
     # ============================================================
@@ -131,6 +149,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         self.isFirstStep = True
         self.stepCount = 0
+
+        # 生成 ego 途径点
+        self._generateEgoWaypoints()
 
         if self.scenarios:
             self.loadScenario(0)
@@ -444,7 +465,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 print(f"[Done] Ego 成功到达终点! (剩余距离: {dist_to_end:.2f}m)")
                 self._is_reached_goal = True
                 return True
-            
+
             return False
 
         x_min, x_max, y_min, y_max = target_area
@@ -637,8 +658,12 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._is_timeout = False
         simIface = self.simIface or tessngIFace().simuInterface()
         current_simu_time = simIface.simuTimeIntervalWithAcceMutiples()
-        if self._egoInfo["info"] and current_simu_time > self._egoInfo["info"]["timeout"]:
+        if (
+            self._egoInfo["info"]
+            and current_simu_time > self._egoInfo["info"]["timeout"]
+        ):
             self._is_timeout = True
+            self.egoFinishStatus = self.EgoStatus.TIMEOUT
 
         # 碰撞检测
         ego_id = egoVehicle.id()
@@ -646,28 +671,34 @@ class MySimulator(QObject, PyCustomerSimulator):
             if v.id() != ego_id:
                 if self._check_bbox_collision_vehi(egoVehicle, v):
                     self._is_collision = True
+                    self.egoFinishStatus = self.EgoStatus.COLLISION
                     break
 
         # 终止与重置判断
         is_reached_goal = self._isEgoInTargetArea(egoVehicle)
+        if is_reached_goal:
+            self.egoFinishStatus = self.EgoStatus.ARRIVED
 
         is_out_of_bounds = False
         if abs(getattr(self, "_current_lateral_dist", 0.0)) > (
             MAX_LANE_WIDTH / 2.0 + 0.5
         ):
             is_out_of_bounds = True
+            self.egoFinishStatus = self.EgoStatus.DEVIATE_LANE
 
-        if self._is_timeout or self._is_collision or is_reached_goal or is_out_of_bounds:
-            if self._is_timeout:
-                reason = "超时"
-            elif self._is_collision:
-                reason = "发生碰撞"
-            elif is_reached_goal:
-                reason = "成功进入目标区域"
-            elif is_out_of_bounds:
-                reason = "偏离车道"
-            else:
-                reason = "达到最大步数"
+        # if self._is_timeout or self._is_collision or is_reached_goal or is_out_of_bounds:
+        if self.egoFinishStatus != self.EgoStatus.IDLE:
+            reason = self.EGO_STATUS_REASON[self.egoFinishStatus]
+            # if self._is_timeout:
+            #     reason = "超时"
+            # elif self._is_collision:
+            #     reason = "发生碰撞"
+            # elif is_reached_goal:
+            #     reason = "成功进入目标区域"
+            # elif is_out_of_bounds:
+            #     reason = "偏离车道"
+            # else:
+            #     reason = "达到最大步数"
 
             print(f"[推理] {reason}，重置环境。")
             self._inferCreated = False
@@ -1164,6 +1195,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._current_lateral_dist = 0.0  # 清理横向偏差缓存
         self._current_angle_diff = 0.0  # 清理航向角偏差缓存
         self._ego_stuck_count = 0  # 清理卡死计数
+        self.egoFinishStatus = self.EgoStatus.IDLE  # 清理状态标志
 
         # 切换场景
         self.clearTessngBgVehicles()
@@ -1762,3 +1794,163 @@ class MySimulator(QObject, PyCustomerSimulator):
         dy = by - ay
         heading = math.degrees(math.atan2(dx, dy)) % 360.0
         return bx, by, heading
+
+    def _createEgoRouting(self, ego_info):
+        """创建主车路由"""
+        netIface = self.netIface or tessngIFace().netInterface()
+        simIface = self.simIface or tessngIFace().simuInterface()
+
+        initial_state = ego_info.get("initial_state", {})
+        driving_task = ego_info.get("driving_task", {})
+        speed = initial_state.get("v", 10.0)
+        target_center = driving_task.get("target_center", [0.0, 0.0])
+        waypoints = []
+
+        start_x = initial_state.get("x", 0.0)
+        start_y = initial_state.get("y", 0.0)
+        end_x = target_center[0]
+        end_y = target_center[1]
+
+        start_point = QPointF(start_x, -start_y)
+        end_waypoint = QPointF(end_x, -end_y)
+
+        start_waypoint = self.createTessngWaypoint(start_point, 0, speed)
+        end_waypoint = self.createTessngWaypoint(end_waypoint, 1, 2.0)
+
+        if start_waypoint and end_waypoint:
+            waypoints.append(start_waypoint)
+            waypoints.append(end_waypoint)
+
+        if not self.setupTessngRoutingDispatch(start_point, waypoints):
+            print(f"[TESSNG Ego] 创建 routing 失败: 发车点创建失败")
+            return []
+
+        param = Online.DynaSingleRoutingParam()
+        param.level = "lane"
+        param.lWaypointId = [wp.id() for wp in waypoints]
+        param.desiredMode = 0
+        param.name = "routing"
+
+        routing = netIface.createSingleRouting(param, waypoints)
+        if not routing:
+            print(f"[TESSNG Ego] 创建 single routing 失败")
+            return []
+
+        print(
+            f"[TESSNG Ego] 使用 TESSNG single routing 控制, routing_id={routing.id()}"
+        )
+        lanes = routing.passingILaneObjects()
+
+        lane_points = []
+        for i, lane in enumerate(lanes):
+            pts = [(p.x(), p.y()) for p in lane.centerBreakPoints()]
+            lane_points.append(pts)
+
+        print(f"[TESSNG Ego] 路由包含 {len(lanes)} 条车道\n{lanes}")
+
+        ego_waypoints = self._getRobustWaypoints(
+            lane_points, (start_x, -start_y), (end_x, -end_y), 8.0
+        )
+        print(f"[TESSNG Ego] 平滑后的路由包含 {len(ego_waypoints)} 个点")
+
+        # 删除路由
+        netIface.removeSingleRouting(routing)
+
+        return ego_waypoints
+
+    def _getRobustWaypoints(self, lane_points, start, end, step_size=0.5):
+        # 1. 整理控制点
+        all_pts = []
+        for lane_pts in lane_points:
+            all_pts.extend(lane_pts)
+
+        # 过滤与去重
+        path = (
+            [np.array(start)]
+            + [np.array(p) for p in all_pts if start[0] < p[0] < end[0]]
+            + [np.array(end)]
+        )
+        # 去除相邻重复点（这是防止插值报错的关键）
+        unique_path = [path[0]]
+        for i in range(1, len(path)):
+            if np.linalg.norm(path[i] - unique_path[-1]) > 0.01:
+                unique_path.append(path[i])
+        path_arr = np.array(unique_path)
+
+        # 2. 判断是否为直线
+        # 如果点数少于3个，或者三点共线，直接使用线性插值
+        is_line = False
+        if len(path_arr) < 3:
+            is_line = True
+        else:
+            # 计算斜率的变化情况，如果斜率变化极小，判定为直线
+            diffs = np.diff(path_arr, axis=0)
+            angles = np.arctan2(diffs[:, 1], diffs[:, 0])
+            if np.std(angles) < 0.01:  # 角度标准差很小，认为是直线
+                is_line = True
+
+        # 3. 采样逻辑
+        if is_line:
+            # 直线方案
+            segments = np.diff(path_arr, axis=0)
+            dist_each = np.linalg.norm(segments, axis=1)
+            total_dist = np.sum(dist_each)
+            num_samples = int(total_dist / step_size)
+
+            resampled_points = []
+            for i in range(num_samples):
+                d = i * step_size
+                cum_dist = np.insert(np.cumsum(dist_each), 0, 0)
+                idx = np.searchsorted(cum_dist, d) - 1
+                idx = np.clip(idx, 0, len(path_arr) - 2)
+                t = (d - cum_dist[idx]) / dist_each[idx]
+                pt = path_arr[idx] + t * (path_arr[idx + 1] - path_arr[idx])
+                resampled_points.append(pt)
+
+            # 强制添加终点
+            resampled_points.append(path_arr[-1])
+            return np.array(resampled_points)
+
+        else:
+            # 曲线方案
+            tck, u = splprep([path_arr[:, 0], path_arr[:, 1]], s=0, k=3)
+            u_dense = np.linspace(0, 1, 1000)
+            x_dense, y_dense = splev(u_dense, tck)
+
+            dist = np.sqrt(np.diff(x_dense) ** 2 + np.diff(y_dense) ** 2)
+            arc_length = np.concatenate(([0], np.cumsum(dist)))
+
+            # 使用 arange 保证步长，最后显式加上 total_length
+            target_dists = np.arange(0, arc_length[-1], step_size)
+            target_dists = np.append(target_dists, arc_length[-1])  # 强制加入终点
+
+            x_resampled = np.interp(target_dists, arc_length, x_dense)
+            y_resampled = np.interp(target_dists, arc_length, y_dense)
+            return np.column_stack((x_resampled, y_resampled))
+
+    def _generateEgoWaypoints(self):
+        for scenario in self.scenarios:
+            vehicles = scenario.get("vehicles", {})
+            for vehi_name in vehicles:
+                if vehi_name != "ego":
+                    continue
+
+                vehi = vehicles[vehi_name]
+
+                info = vehi.get("info", {})
+                if not info:
+                    continue
+                
+                info["driving_task"]["target_center"] = [14.3211, 42.4427]
+                ego_waypoints = self._createEgoRouting(info)
+                
+                print(f"[TESSNG Ego] 路由包含 {len(ego_waypoints)} 个点\n{ego_waypoints}")
+
+                if ego_waypoints.shape[0] > 0:
+                    waypoints = [[pt[0], pt[1]] for pt in ego_waypoints]
+                    vehi["path"] = waypoints
+                else:
+                    pass
+
+                break  # 找到 ego ，退出循环
+
