@@ -118,6 +118,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.stepCount = 0
         self.episodeReward = 0.0
         self.episodeCount = 0
+        self.start_simu_time = 0.0 # 记录本次训练或推理的开始时间
 
         # 多模型配置
         self.egoModel = None
@@ -497,6 +498,20 @@ class MySimulator(QObject, PyCustomerSimulator):
             print("[Done] Ego 成功进入目标区域!")
             self._is_reached_goal = True
             return True
+        
+        # 超时检测
+        simIface = self.simIface or tessngIFace().simuInterface()
+        current_simu_time = simIface.simuTimeIntervalWithAcceMutiples()
+        elapsed_simu_time = current_simu_time - self.start_simu_time
+
+        if (
+            self._egoInfo["info"]
+            and elapsed_simu_time > self._egoInfo["info"]["timeout"]
+        ):
+            print(f"[Done] Ego 训练超时! (已进行 {elapsed_simu_time/1000:.2f}s, 限制 {self._egoInfo['info']['timeout']/1000:.2f}s)")
+            self._is_timeout = True
+            return True
+
         # 取消最大步数限制，由目标到达、碰撞、出界或卡死来决定结束
         # if self.stepCount >= TRAIN_MAX_STEPS:
         #     print("[Done] 达到最大步数")
@@ -556,6 +571,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self._inferStep = 0
             self._is_collision = False
             self.yawRateCalc.reset()
+            self.start_simu_time = self.simIface.simuTimeIntervalWithAcceMutiples() # 记录本次推理开始的仿真时间
             return
 
         egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
@@ -658,9 +674,11 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._is_timeout = False
         simIface = self.simIface or tessngIFace().simuInterface()
         current_simu_time = simIface.simuTimeIntervalWithAcceMutiples()
+        # 使用当前仿真时间减去本次推理开始时间，得到本次的仿真时长
+        elapsed_simu_time = current_simu_time - self.start_simu_time
         if (
             self._egoInfo["info"]
-            and current_simu_time > self._egoInfo["info"]["timeout"]
+            and elapsed_simu_time > self._egoInfo["info"]["timeout"]
         ):
             self._is_timeout = True
             self.egoFinishStatus = self.EgoStatus.TIMEOUT
@@ -707,6 +725,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 self.clearTessngBgVehicles()
                 if getattr(self, "multiInfer", None):
                     self.multiInfer.resetAll()
+                    self.egoFinishStatus = self.EgoStatus.IDLE  # 清理状态标志
             else:
                 self.doReset()
                 print("[推理] 回合结束，自动切换到下一个场景...")
@@ -1196,6 +1215,9 @@ class MySimulator(QObject, PyCustomerSimulator):
         self._current_angle_diff = 0.0  # 清理航向角偏差缓存
         self._ego_stuck_count = 0  # 清理卡死计数
         self.egoFinishStatus = self.EgoStatus.IDLE  # 清理状态标志
+
+        simIface = self.simIface or tessngIFace().simuInterface()
+        self.start_simu_time = simIface.simuTimeIntervalWithAcceMutiples() # 记录本次训练开始的仿真时间
 
         # 切换场景
         self.clearTessngBgVehicles()
