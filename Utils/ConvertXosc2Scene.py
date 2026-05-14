@@ -175,7 +175,7 @@ def parse_xosc(file_path):
 
     stop_trigger = root.find(".//StopTrigger//SimulationTimeCondition")
     if stop_trigger is not None:
-        ego_task["timeout"] = float(stop_trigger.get("value"))
+        ego_task["timeout"] = float(stop_trigger.get("value")) * 1000  # 转成毫秒
     else:
         ego_task["timeout"] = None
 

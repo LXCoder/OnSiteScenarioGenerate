@@ -70,6 +70,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 获取场景数据
         self.scenarios = g_scenario_loader.getScenarios().copy()
         self.scenario_indices = []  # 用来存放洗牌后的索引队列
+        self._egoInfo = None  # 当前场景中 ego 的配置信息
 
         # 当前场景
         self.currentScenarioIdx = 0
@@ -595,6 +596,13 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         self._inferStep += 1
 
+        # 超时检测
+        self._is_timeout = False
+        simIface = self.simIface or tessngIFace().simuInterface()
+        current_simu_time = simIface.simuTimeIntervalWithAcceMutiples()
+        if current_simu_time > self._egoInfo["info"]["timeout"]:
+            self._is_timeout = True
+
         # 碰撞检测
         ego_id = egoVehicle.id()
         for v in vehicles:
@@ -616,8 +624,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         ):
             is_out_of_bounds = True
 
-        if self._is_collision or is_reached_goal or is_out_of_bounds:
-            if self._is_collision:
+        if self._is_timeout or self._is_collision or is_reached_goal or is_out_of_bounds:
+            if self._is_timeout:
+                reason = "超时"
+            elif self._is_collision:
                 reason = "发生碰撞"
             elif is_reached_goal:
                 reason = "成功到达终点"
@@ -772,6 +782,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.currentVehicles = self.scenarios[idx]["vehicles"]
         self.egoName = "ego"  # 切换场景前重置默认 Ego 名称
         self.initBgAgents()
+        self._egoInfo = self.currentVehicles.get(self.egoName)
 
     def switchScenario(self, idx):
         self.loadScenario(idx)
