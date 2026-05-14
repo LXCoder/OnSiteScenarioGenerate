@@ -409,6 +409,51 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         return float(total_reward)
 
+    def _getEgoTargetArea(self):
+        """从场景配置中读取 Ego 的目标区域，并转换到当前内部坐标系。"""
+        ego_info = self._egoInfo or self.currentVehicles.get(self.egoName)
+        if not ego_info:
+            return None
+
+        driving_task = ego_info.get("info", {}).get("driving_task", {})
+        x_target = driving_task.get("x_target")
+        y_target = driving_task.get("y_target")
+        if not x_target or not y_target:
+            return None
+
+        try:
+            x_min, x_max = sorted(float(v) for v in x_target[:2])
+            y_min, y_max = sorted(-float(v) for v in y_target[:2])
+        except (TypeError, ValueError):
+            return None
+
+        return x_min, x_max, y_min, y_max
+
+    def _isEgoInTargetArea(self, egoVehicle) -> bool:
+        """判断 Ego 是否进入目标矩形区域。"""
+        target_area = self._getEgoTargetArea()
+        if target_area is None:
+            # 无目标区域信息，则选择距离判断是否到达终点
+            # Frenet 纵向距离判定
+            # 直接使用已计算的缓存值
+            s_ego = getattr(self, "_current_s_ego", 0.0)
+            s_total = getattr(self, "_current_s_total", 0.0)
+            dist_to_end = s_total - s_ego
+
+            if s_total > 0.0 and dist_to_end < 5.0:
+                print(f"[Done] Ego 成功到达终点! (剩余距离: {dist_to_end:.2f}m)")
+                self._is_reached_goal = True
+                return True
+            
+            return False
+
+        x_min, x_max, y_min, y_max = target_area
+        ego_pos = egoVehicle.pos()
+        ego_x = p2m(ego_pos.x())
+        ego_y = -p2m(ego_pos.y())
+
+        return x_min <= ego_x <= x_max and y_min <= ego_y <= y_max
+
     def checkEgoDone(self, egoVehicle) -> bool:
         if getattr(self, "_is_collision", False):
             print("[Done] Ego 发生碰撞!")
@@ -428,17 +473,10 @@ class MySimulator(QObject, PyCustomerSimulator):
             print("[Done] Ego 陷入低速卡死状态!")
             return True
 
-        # [新增] Frenet 纵向距离判定
-        # 直接使用已计算的缓存值
-        s_ego = getattr(self, "_current_s_ego", 0.0)
-        s_total = getattr(self, "_current_s_total", 0.0)
-        dist_to_end = s_total - s_ego
-
-        if s_total > 0.0 and dist_to_end < 5.0:
-            print(f"[Done] Ego 成功到达终点! (剩余距离: {dist_to_end:.2f}m)")
+        if self._isEgoInTargetArea(egoVehicle):
+            print("[Done] Ego 成功进入目标区域!")
             self._is_reached_goal = True
             return True
-
         # 取消最大步数限制，由目标到达、碰撞、出界或卡死来决定结束
         # if self.stepCount >= TRAIN_MAX_STEPS:
         #     print("[Done] 达到最大步数")
@@ -612,11 +650,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                     break
 
         # 终止与重置判断
-        is_reached_goal = False
-        s_ego = getattr(self, "_current_s_ego", 0.0)
-        s_total = getattr(self, "_current_s_total", 0.0)
-        if s_total > 0.0 and (s_total - s_ego) < 5.0:
-            is_reached_goal = True
+        is_reached_goal = self._isEgoInTargetArea(egoVehicle)
 
         is_out_of_bounds = False
         if abs(getattr(self, "_current_lateral_dist", 0.0)) > (
@@ -630,7 +664,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             elif self._is_collision:
                 reason = "发生碰撞"
             elif is_reached_goal:
-                reason = "成功到达终点"
+                reason = "成功进入目标区域"
             elif is_out_of_bounds:
                 reason = "偏离车道"
             else:
@@ -811,6 +845,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             # 记录当前场景下 Ego 的期望速度
             self._ego_target_speed = ego_info.get("speed", 15.0)
+            self._egoInfo = ego_info
 
             # 如果初始状态存在，修正它的值
             if self.egoState:

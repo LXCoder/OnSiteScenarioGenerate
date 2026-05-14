@@ -170,6 +170,7 @@ class ScenarioLoader:
             rawPath = info.get("path", [])
             speed = info.get("speed", 10.0)
             color = info.get("color", "#4911E4")
+            vehicle_info = info.get("info", {})
 
             # 转成 tuple 列表
             path = [(float(p[0]), float(p[1])) for p in rawPath]
@@ -183,6 +184,7 @@ class ScenarioLoader:
                 "speed": speed,
                 "color": color,
                 "control": info.get("control", info.get("controlMode", "model")),
+                "info": vehicle_info,
             }
 
         return {"vehicles": vehicles}
