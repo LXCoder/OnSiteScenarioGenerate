@@ -11,6 +11,7 @@ from Tessng import (
     PyCustomerSimulator,
     tessngIFace,
     p2m,
+    m2p,
 )
 
 from AutoPilot.TessngDrivingEnv import TessngDrivingEnv, ACTIONS, ACTION_TO_CONTROL
@@ -665,7 +666,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
         if is_debug_info:
             print(
-                f"[推理 Step {self._inferStep}] Ego 推理中... 当前速度: {self.egoState.speed:.2f} m/s 当前朝向: {self.egoState.heading:.2f}"
+                f"[推理 Step {self._inferStep}] Ego 推理中...\n",
+                f"当前速度: {self.egoState.speed:.2f} m/s\n"
+                f"当前朝向: {self.egoState.heading:.2f}°\n"
+                f"当前位置: ({self.egoState.x:.2f}, {self.egoState.y:.2f})\n"
             )
 
         self._inferStep += 1
@@ -682,6 +686,11 @@ class MySimulator(QObject, PyCustomerSimulator):
         ):
             self._is_timeout = True
             self.egoFinishStatus = self.EgoStatus.TIMEOUT
+            
+        # 驶出地图边界检测
+        locations = self.netIface.locateOnCrid(QPointF(m2p(self.egoState.x), -m2p(self.egoState.y)), 1)
+        if not locations:
+            self.egoFinishStatus = self.EgoStatus.OUTBOUND
 
         # 碰撞检测
         ego_id = egoVehicle.id()
