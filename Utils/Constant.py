@@ -56,7 +56,7 @@ FILTER_SCENES = _get_env_list(
 )
 
 NET_ROOT = "Data/nets"
-NET_PATH = _get_env_str("TESSNG_NET_PATH", r"Data\YYT_TJST_0619_unlimited.tess")
+NET_PATH = _get_env_str("TESSNG_NET_PATH", "Data/YYT_TJST_0619_unlimited.tess")
 # NET_PATH = r"Data\scenario_0a5c9dbc.tess"
 # NET_PATH = r"Data\scenario_0a6bf824.tess"
 SCENE_TESS_MAPPING_PATH = _get_env_str("TESSNG_SCENE_TESS_MAPPING_PATH", "Data/map40_to_scene_names.json")
