@@ -321,6 +321,23 @@ python main.py --batch-config your_batch_config.json
 
 推荐优先使用批量 JSON 配置，不建议反复手工改 `Utils/Constant.py` 再执行。
 
+容器启动方式
+```bash
+docker run --rm -it --cap-add=SYS_ADMIN --network=host \
+-v /tmp/.X11-unix:/tmp/.X11-unix \
+-v /etc/fonts:/etc/fonts \
+-v /usr/share/fontconfig:/usr/share/fontconfig \
+-v /usr/share/fonts:/usr/share/fonts \
+-v /home/dt/workspace/OnSiteScenarioGenerate/Cert:/app/Cert \
+-e TZ="Asia/Shanghai" -e DISPLAY=$DISPLAY \
+--name tess_auto_x2 \
+jida-inspur-4:2443/library/tess_auto:20260515
+
+python main.py
+# or
+python main.py --batch-config your_batch_config.json
+```
+
 
 ## 9. 当前实现限制
 
