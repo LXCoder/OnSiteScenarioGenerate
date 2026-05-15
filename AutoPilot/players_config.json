@@ -1,6 +1,6 @@
 {
     "test": {
-        "file": "D:/workspace/OnSiteScenarioGenerate/AutoPilot/TestPlayer.py",
+        "file": "AutoPilot/TestPlayer.py",
         "class": "TestPlayer",
         "player_id": "test"
     }

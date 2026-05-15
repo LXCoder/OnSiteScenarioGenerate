@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 
 
 def _get_env_str(name, default):
@@ -32,6 +33,8 @@ def _get_env_list(name, default):
 
     return [item.strip() for item in value.split(",") if item.strip()]
 
+# 目录
+PROJECT_ROOT_DIR=os.path.dirname(os.path.abspath(sys.argv[0]))
 
 # 归一化常量
 MAX_LANE_WIDTH = 4.0

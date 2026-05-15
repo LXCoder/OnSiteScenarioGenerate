@@ -1,7 +1,8 @@
+import os
 import json
 import importlib.util
 from typing import Dict, Any
-
+from Utils.Constant import PROJECT_ROOT_DIR
 from AutoPilot.Player.BasePlayer import BasePlayer
 
 
@@ -16,7 +17,7 @@ class PlayerFactory:
             raise KeyError(f"配置中不存在选手 '{team_name}'")
 
         entry = self.config[team_name]
-        file_path = entry["file"]
+        file_path = os.path.join(PROJECT_ROOT_DIR, entry["file"])
         class_name = entry["class"]
         player_id = entry.get("player_id", team_name)
 
