@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 from Utils.ScenarioLoader import g_scenario_loader
 
-if sys.platform.startswith('linux'):
+is_linux = sys.platform.startswith('linux')
+if is_linux:
     from TessngLib.Tessng import *
 
 
@@ -82,6 +83,7 @@ def load_batch_configs(config_path):
                 }
             )
         else:
+            sub_idx = 0
             for file_item in os.listdir(data_dir):
                 normalized.append(
                     {
@@ -95,6 +97,7 @@ def load_batch_configs(config_path):
                         "TRAIN_MODE": item.get("TRAIN_MODE"),
                     }
                 )
+                sub_idx += 1
 
     return normalized
 
@@ -149,7 +152,7 @@ def run_batch(config_path):
         command = [sys.executable, str(WORKSPACE / "main.py"), "--single-run"]
         result = subprocess.run(command, cwd=str(WORKSPACE), env=env)
 
-        if result.returncode != 0:
+        if not is_linux and result.returncode != 0:
             print(f"[批量] 任务失败: {config['name']}, returncode={result.returncode}")
             return result.returncode
 
