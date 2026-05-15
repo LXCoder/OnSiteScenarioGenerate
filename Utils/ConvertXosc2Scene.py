@@ -153,7 +153,7 @@ def parse_xosc(file_path):
 
     ego_task = {}
     # 提取 v_init, x_init, y_init, heading_init
-    init_match = re.search(r"\[Initial State\] v_init = (.*?), x_init = (.*?), y_init = (.*?), heading_init = (.*?)-", raw_content)
+    init_match = re.search(r"\[Initial State\] v_init = (.*?), x_init = (.*?), y_init = (.*?), heading_init = (.*?)-->", raw_content)
     if init_match:
         ego_task["initial_state"] = {
             "v": float(init_match.group(1).strip(', ')),
