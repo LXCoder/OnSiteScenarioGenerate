@@ -2,6 +2,8 @@ import math
 import os
 import threading
 import numpy as np
+import csv
+from datetime import datetime
 from enum import Enum
 from scipy.interpolate import splev, splprep
 from PySide2.QtCore import QObject, QPointF, Signal, QCoreApplication
@@ -121,6 +123,14 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.episodeCount = 0
         self.start_simu_time = 0.0 # 记录本次训练或推理的开始时间
 
+        # 数据记录相关
+        self.log_file = None
+        self.csv_writer = None
+        self.log_filepath = None
+        self.log_data_list = [] # 用于缓存每帧数据
+
+        self.csv_header = ['time', 'acc', 'rot', 'x_ego', 'y_ego', 'v_ego', 'a_ego', 'yaw_ego', 'rot_ego', 'width_ego', 'length_ego', 'end']
+
         # 多模型配置
         self.egoModel = None
         self.bgModel = None
@@ -135,6 +145,28 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.EgoStatus.OUTBOUND: "驶出地图边界",
             self.EgoStatus.DEVIATE_LANE: "偏离车道",
         }
+
+    def _update_csv_header(self):
+        """
+        根据当前场景中的背景车辆动态更新 CSV header。
+        在 initBgAgents 或 doReset 之后调用。
+        """
+        # 重置为仅包含 Ego 信息的初始 header
+        self.csv_header = ['time', 'acc', 'rot', 'x_ego', 'y_ego', 'v_ego', 'a_ego', 'yaw_ego', 'rot_ego', 'width_ego', 'length_ego']
+        
+        # 按照 bgAgents 中的车辆名称顺序添加背景车信息
+        # 确保 bgAgents 已经初始化
+        if self.bgAgents:
+            # 排序背景车名称，确保每次生成的 CSV 列顺序一致
+            sorted_bg_names = sorted(self.bgAgents.keys(), key=lambda x: int(x.split('_')[-1]) if '_' in x else x)
+            for name in sorted_bg_names:
+                # 提取数字ID作为列名后缀，例如 'car_1' -> '1'
+                key_suffix = name.split('_')[-1] if '_' in name else name
+                self.csv_header.extend([
+                    f'x_{key_suffix}', f'y_{key_suffix}', f'v_{key_suffix}', f'a_{key_suffix}', f'yaw_{key_suffix}', f'width_{key_suffix}', f'length_{key_suffix}'
+                ])
+        
+        self.csv_header.append('end')
 
     # ============================================================
     #  Tessng 生命周期
@@ -196,6 +228,17 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def afterStop(self):
         print("[MySimulator] 仿真结束")
+        # 确保在仿真停止时写入所有剩余数据并关闭文件
+        if self.csv_writer and self.log_data_list:
+            # 记录最终状态，如果没有明确的 EgoFinishStatus，可以记录 IDLE 或一个特定值
+            if len(self.log_data_list[-1]) < len(self.csv_header):
+                self.log_data_list[-1].append(self.EgoStatus.IDLE.value)
+            self.csv_writer.writerows(self.log_data_list)
+            self.log_file.close()
+            self.log_file = None
+            self.csv_writer = None
+            self.log_data_list = []
+
         if EXIT_ON_SIMULATION_STOP:
             QCoreApplication.quit()
 
@@ -541,6 +584,19 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def _afterOneStepInference(self, vehicles):
         if not getattr(self, "_inferCreated", False):
+            # 数据记录初始化
+            log_dir = "log"
+            os.makedirs(log_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.log_filepath = os.path.join(log_dir, f"inference_data_{timestamp}.csv")
+
+            self._update_csv_header() # 更新 CSV header
+
+            self.log_file = open(self.log_filepath, 'w', newline='')
+            self.csv_writer = csv.writer(self.log_file)
+            self.csv_writer.writerow(self.csv_header)
+            self.log_data_list = [] # 清空缓存，准备记录新一轮数据
+
             # 初始化 Ego 状态
             init_x, init_y = (
                 self.egoSmoothedPath[0] if self.egoSmoothedPath else (0.0, 0.0)
@@ -674,6 +730,62 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         self._inferStep += 1
 
+        # ====== 数据记录 =====
+        row_data = [
+            round(self._inferStep * self.dt, 3), # time
+            round(self.currentEgoControl[0], 3), # acc
+            round(self.currentEgoControl[1], 3), # rot
+            round(self.egoState.x, 3), # x_ego
+            round(self.egoState.y, 3), # y_ego
+            round(self.egoState.speed, 3), # v_ego
+            round(self.currentEgoControl[0], 3), # a_ego (using control input for now)
+            round(self.egoState.heading, 3), # yaw_ego
+            round(self.currentEgoControl[1], 3), # rot_ego (using control input for now)
+            round(egoVehicle.width(), 3) if egoVehicle else 0.0, # width_ego
+            round(egoVehicle.length(), 3) if egoVehicle else 0.0, # length_ego
+        ]
+
+        # 收集背景车辆数据
+        # 确保 bgAgents 已经初始化，并且 CSV header 已按名称排序
+        sorted_bg_names = sorted(self.bgAgents.keys(), key=lambda x: int(x.split('_')[-1]) if '_' in x else x)
+        
+        # Create a map of active TESSNG vehicles keyed by their agent name for easier lookup
+        active_bg_veh_map_by_agent_name = {self.tessAuto.tessngId2AvNameMap.get(v.id()): v for v in bgVehicles}
+
+        for name in sorted_bg_names:
+            bg_tessng_veh = active_bg_veh_map_by_agent_name.get(name) # Get vehicle from tessng ID map using agent name
+            agent = self.bgAgents.get(name)
+            
+            if agent and bg_tessng_veh: # Check if agent and vehicle exist
+                bg_agent_state = agent.get('state')
+                bg_prev_control = agent.get('prev_control', (0.0, 0.0))
+                
+                if bg_agent_state:
+                    # Extract numerical suffix for column naming (e.g., 'car_1' -> '1')
+                    key_suffix = name.split('_')[-1] if '_' in name else name
+                    row_data.extend([
+                        round(bg_agent_state.x, 3),
+                        round(bg_agent_state.y, 3),
+                        round(bg_agent_state.speed, 3),
+                        round(bg_prev_control[0], 3), # a_N (using control input)
+                        round(bg_agent_state.heading, 3),
+                        round(bg_tessng_veh.width(), 3),
+                        round(bg_tessng_veh.length(), 3),
+                    ])
+                else:
+                    # Vehicle exists but state is not available, fill with zeros
+                    row_data.extend([0.0] * 7)
+            else:
+                # Vehicle or agent not found, fill with zeros
+                row_data.extend([0.0] * 7) # Fill with 0.0 or '' as needed
+        
+        if self.egoFinishStatus == self.EgoStatus.IDLE:
+            row_data.append(-1)
+        else:
+            row_data.append(self.egoFinishStatus)
+
+        self.log_data_list.append(row_data)
+
         # 超时检测
         self._is_timeout = False
         simIface = self.simIface or tessngIFace().simuInterface()
@@ -730,11 +842,25 @@ class MySimulator(QObject, PyCustomerSimulator):
             print(f"[推理] {reason}，重置环境。")
             self._inferCreated = False
 
+            # 在结束状态时，记录 end 并将所有缓存数据写入文件
+            if self.log_data_list:
+                # 给最后一帧数据加上结束状态
+                self.log_data_list[-1][-1] = self.egoFinishStatus.value
+            else: # 如果没有任何数据被记录，也要加一个结束状态
+                self.log_data_list.append([''] * (len(self.csv_header) -1) + [self.egoFinishStatus.value]) # add an empty row with just the status
+
+            if self.csv_writer:
+                self.csv_writer.writerows(self.log_data_list)
+                self.log_file.close()
+                self.log_file = None
+                self.csv_writer = None
+            self.log_data_list = [] # 清空缓存
+
             if REPEAT_SINGLE_SCENARIO:
                 self.clearTessngBgVehicles()
                 if getattr(self, "multiInfer", None):
                     self.multiInfer.resetAll()
-                    self.egoFinishStatus = self.EgoStatus.IDLE  # 清理状态标志
+                self.egoFinishStatus = self.EgoStatus.IDLE  # 清理状态标志
             else:
                 self.doReset()
                 print("[推理] 回合结束，自动切换到下一个场景...")
@@ -1239,6 +1365,8 @@ class MySimulator(QObject, PyCustomerSimulator):
             smoothed = agent["smoothed"]
             init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
             agent["x"], agent["y"] = init_x, init_y
+        
+        self._update_csv_header() # 更新 CSV header
 
         self.isFirstStep = True
         print(f"\n[Reset] Ego 状态已重置，开始新的 Episode。")
@@ -1972,7 +2100,6 @@ class MySimulator(QObject, PyCustomerSimulator):
                 if not info:
                     continue
                 
-                info["driving_task"]["target_center"] = [14.3211, 42.4427]
                 ego_waypoints = self._createEgoRouting(info)
                 
                 print(f"[TESSNG Ego] 路由包含 {len(ego_waypoints)} 个点\n{ego_waypoints}")

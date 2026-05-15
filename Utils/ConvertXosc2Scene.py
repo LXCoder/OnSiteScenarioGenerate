@@ -201,7 +201,7 @@ def parse_xosc(file_path):
 
             for actor_name in actors:
                 is_ego = "Ego" in actor_name
-                vehicle_key = "ego" if is_ego else actor_name.lower()
+                vehicle_key = "ego" if is_ego else actor_name.lower().replace("a","car_")
                 all_vehicles[vehicle_key] = {
                     "path": path,
                     # "path": get_smart_waypoints(path, 0.3, 3),
