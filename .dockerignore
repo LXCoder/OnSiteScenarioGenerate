@@ -1,0 +1,41 @@
+# 忽略 git 文件
+.git
+.gitignore
+
+# 忽略 Python 虚拟环境
+.venv
+env/
+
+# 忽略日志
+log/
+*.log
+
+# 忽略构建产生的文件
+build/
+dist/
+__pycache__/
+*.pyc
+
+# 忽略测试输出
+coverage/
+pytest_cache/
+
+# 忽略大文件
+dataset/
+models/
+*.zip
+
+static/reports
+
+
+.qodo
+.gemini
+.codex
+.agents
+
+Cert/
+Log/
+traj_output/
+SimuResult/
+WorkSpace/
+TESS_AUTO_Interface_doc.md
