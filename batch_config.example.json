@@ -15,6 +15,7 @@
     "BG_MODEL_FILENAME": "model.zip.v6",
     "DATA_DIR": "Data/prod/select",
     "USE_TEST_LOGIC": false,
+    "TRAJ_OUTPUT":"/tmp/traj_output_1",
     "REPEAT_SINGLE_SCENARIO": false
   }
 ]

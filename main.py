@@ -7,10 +7,9 @@ import sys
 from pathlib import Path
 from Utils.ScenarioLoader import g_scenario_loader
 
-is_linux = sys.platform.startswith('linux')
+is_linux = sys.platform.startswith("linux")
 if is_linux:
     from TessngLib.Tessng import *
-
 
 
 WORKSPACE = Path(__file__).resolve().parent
@@ -80,6 +79,8 @@ def load_batch_configs(config_path):
                     "USE_TEST_LOGIC": is_use_test_logic,
                     "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
                     "TRAIN_MODE": item.get("TRAIN_MODE"),
+                    "TRAIN_TOTAL_TIMESTEPS": item.get("TRAIN_TOTAL_TIMESTEPS"),
+                    "TRAJ_OUTPUT": item.get("TRAJ_OUTPUT"),
                 }
             )
         else:
@@ -95,6 +96,8 @@ def load_batch_configs(config_path):
                         "USE_TEST_LOGIC": is_use_test_logic,
                         "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
                         "TRAIN_MODE": item.get("TRAIN_MODE"),
+                        "TRAIN_TOTAL_TIMESTEPS": item.get("TRAIN_TOTAL_TIMESTEPS"),
+                        "TRAJ_OUTPUT": item.get("TRAJ_OUTPUT"),
                     }
                 )
                 sub_idx += 1
@@ -128,6 +131,9 @@ def apply_batch_env(env, config):
     if config.get("TRAIN_TOTAL_TIMESTEPS") is not None:
         env["TRAIN_TOTAL_TIMESTEPS"] = str(config["TRAIN_TOTAL_TIMESTEPS"])
 
+    if config.get("TRAJ_OUTPUT") is not None:
+        env["TRAJ_OUTPUT"] = str(config["TRAJ_OUTPUT"])
+    
 
 def run_batch(config_path):
     configs = load_batch_configs(config_path)

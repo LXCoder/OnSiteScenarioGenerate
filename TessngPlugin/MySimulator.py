@@ -44,6 +44,7 @@ from Utils.Constant import (
     MAX_STEER_DELTA,
     REPEAT_SINGLE_SCENARIO,
     EXIT_ON_SIMULATION_STOP,
+    TRAJ_OUTPUT
 )
 
 
@@ -145,6 +146,26 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.EgoStatus.OUTBOUND: "驶出地图边界",
             self.EgoStatus.DEVIATE_LANE: "偏离车道",
         }
+
+    def _init_csv_writer(self):
+        if self.currentScenarioIdx >= len(self.scenarios):
+            return
+
+        # 数据记录初始化
+        os.makedirs(TRAJ_OUTPUT, exist_ok=True)
+        print(f"output: {TRAJ_OUTPUT}")
+        basename = os.path.basename(self.scenarios[self.currentScenarioIdx]["file"])
+        scenario_name = basename.split(".")[0]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        traj_log_fullname = f"{self.currentScenarioIdx}_{scenario_name}_output_{timestamp}.csv"
+        self.log_filepath = os.path.join(TRAJ_OUTPUT, traj_log_fullname)
+
+        self._update_csv_header()  # 更新 CSV header
+
+        self.log_file = open(self.log_filepath, "w", newline="")
+        self.csv_writer = csv.writer(self.log_file)
+        self.csv_writer.writerow(self.csv_header)
+        self.log_data_list = []  # 清空缓存，准备记录新一轮数据
 
     def _update_csv_header(self):
         """
@@ -585,17 +606,7 @@ class MySimulator(QObject, PyCustomerSimulator):
     def _afterOneStepInference(self, vehicles):
         if not getattr(self, "_inferCreated", False):
             # 数据记录初始化
-            log_dir = "log"
-            os.makedirs(log_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.log_filepath = os.path.join(log_dir, f"inference_data_{timestamp}.csv")
-
-            self._update_csv_header() # 更新 CSV header
-
-            self.log_file = open(self.log_filepath, 'w', newline='')
-            self.csv_writer = csv.writer(self.log_file)
-            self.csv_writer.writerow(self.csv_header)
-            self.log_data_list = [] # 清空缓存，准备记录新一轮数据
+            self._init_csv_writer()
 
             # 初始化 Ego 状态
             init_x, init_y = (
@@ -1971,10 +1982,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         end_y = target_center[1]
 
         start_point = QPointF(start_x, -start_y)
-        end_waypoint = QPointF(end_x, -end_y)
+        end_point = QPointF(end_x, -end_y)
 
         start_waypoint = self.createTessngWaypoint(start_point, 0, speed)
-        end_waypoint = self.createTessngWaypoint(end_waypoint, 1, 2.0)
+        end_waypoint = self.createTessngWaypoint(end_point, 1, 2.0)
 
         if start_waypoint and end_waypoint:
             waypoints.append(start_waypoint)
@@ -2100,6 +2111,11 @@ class MySimulator(QObject, PyCustomerSimulator):
                 if not info:
                     continue
                 
+                # start_point = vehi["path"][0]
+                # info["initial_state"]["x"] = start_point[0]
+                # info["initial_state"]["y"] = -start_point[1]
+                # print(f"aaa: {start_point}")
+
                 ego_waypoints = self._createEgoRouting(info)
                 
                 print(f"[TESSNG Ego] 路由包含 {len(ego_waypoints)} 个点\n{ego_waypoints}")

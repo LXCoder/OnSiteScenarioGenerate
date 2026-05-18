@@ -84,3 +84,6 @@ REPEAT_SINGLE_SCENARIO = _get_env_bool("TESSNG_REPEAT_SINGLE_SCENARIO", False)
 EXIT_ON_SIMULATION_STOP = _get_env_bool("TESSNG_EXIT_ON_SIMULATION_STOP", True)
 # 由TESSNG 控制的车辆最大数量
 MAX_TESSNG_VEHICLES = 0
+
+# 轨迹除数目录
+TRAJ_OUTPUT = _get_env_str("TRAJ_OUTPUT", "traj_output")
