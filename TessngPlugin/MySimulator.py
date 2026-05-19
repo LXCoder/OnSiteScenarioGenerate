@@ -81,6 +81,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 获取场景数据
         self.scenarios = g_scenario_loader.getScenarios().copy()
         self.scenario_indices = []  # 用来存放洗牌后的索引队列
+        self.all_vehi_names = []
         self._egoInfo = None  # 当前场景中 ego 的配置信息
 
         # 当前场景
@@ -129,7 +130,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.csv_writer = None
         self.log_filepath = None
         self.log_data_list = [] # 用于缓存每帧数据
-
+        self.before_traj = []
         self.csv_header = ['time', 'acc', 'rot', 'x_ego', 'y_ego', 'v_ego', 'a_ego', 'yaw_ego', 'rot_ego', 'width_ego', 'length_ego', 'end']
 
         # 多模型配置
@@ -153,7 +154,6 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 数据记录初始化
         os.makedirs(TRAJ_OUTPUT, exist_ok=True)
-        print(f"output: {TRAJ_OUTPUT}")
         basename = os.path.basename(self.scenarios[self.currentScenarioIdx]["file"])
         scenario_name = basename.split(".")[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -166,6 +166,44 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.csv_writer = csv.writer(self.log_file)
         self.csv_writer.writerow(self.csv_header)
         self.log_data_list = []  # 清空缓存，准备记录新一轮数据
+        # 插入前 31 帧的数据
+        self._insert_before_traj()
+
+
+    def _insert_before_traj(self):
+
+        for i, v in enumerate(self.before_traj):
+            # ego
+            ego_x, ego_y = v["ego"][0], v["ego"][1]
+            row_data = [
+                round(i * 0.1, 3),  # time
+                0.0,  # acc
+                0.0,  # rot
+                round(ego_x, 3),  # x_ego
+                round(ego_y, 3),  # y_ego
+                0.0,  # v_ego
+                0.0,  # a_ego (using control input for now)
+                0.0,  # yaw_ego
+                0.0,  # rot_ego (using control input for now)
+                0.0,  # width_ego
+                0.0,  # length_ego
+            ]
+            # bg vehicle
+            for vehi_name in self.all_vehi_names:
+                if vehi_name == "ego":
+                    continue
+                
+                if vehi_name in v:
+                    bg_x, bg_y = v[vehi_name][0], v[vehi_name][1]
+                    row_data.extend([round(bg_x, 3), round(bg_y, 3)])
+                    row_data.extend([0.0] * 5)
+                else:
+                    row_data.extend([0.0] * 7)
+
+            row_data.extend([-1])
+            self.log_data_list.append(row_data)
+            self._inferStep += 1
+
 
     def _update_csv_header(self):
         """
@@ -180,6 +218,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         if self.bgAgents:
             # 排序背景车名称，确保每次生成的 CSV 列顺序一致
             sorted_bg_names = sorted(self.bgAgents.keys(), key=lambda x: int(x.split('_')[-1]) if '_' in x else x)
+            # 保存所有背景车的 name
+            self.all_vehi_names = sorted_bg_names
             for name in sorted_bg_names:
                 # 提取数字ID作为列名后缀，例如 'car_1' -> '1'
                 key_suffix = name.split('_')[-1] if '_' in name else name
@@ -605,6 +645,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def _afterOneStepInference(self, vehicles):
         if not getattr(self, "_inferCreated", False):
+            self._inferStep = 0
             # 数据记录初始化
             self._init_csv_writer()
 
@@ -636,7 +677,6 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.tessAuto.setAvChannel2AvMsgMap(vsMap)
             self.tessAuto.vehicleCreate()
             self._inferCreated = True
-            self._inferStep = 0
             self._is_collision = False
             self.yawRateCalc.reset()
             self.start_simu_time = self.simIface.simuTimeIntervalWithAcceMutiples() # 记录本次推理开始的仿真时间
@@ -739,7 +779,6 @@ class MySimulator(QObject, PyCustomerSimulator):
                 f"当前位置: ({self.egoState.x:.2f}, {self.egoState.y:.2f})\n"
             )
 
-        self._inferStep += 1
 
         # ====== 数据记录 =====
         row_data = [
@@ -796,6 +835,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             row_data.append(self.egoFinishStatus)
 
         self.log_data_list.append(row_data)
+
+        self._inferStep += 1
+
 
         # 超时检测
         self._is_timeout = False
@@ -1012,6 +1054,20 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.egoName = "ego"  # 切换场景前重置默认 Ego 名称
         self.initBgAgents()
         self._egoInfo = self.currentVehicles.get(self.egoName)
+        # 保存前 31 帧的信息
+        # print(self.currentVehicles)
+        vehicle_keys = self.currentVehicles.keys()
+        all_vehi_before_traj = {
+            k: self.currentVehicles[k].get("initial_raw_path", []) for k in vehicle_keys
+        }
+
+        self.before_traj.clear()
+        self.before_traj = [{} for _ in range(30)]
+        for k, traj in all_vehi_before_traj.items():
+            for v in traj:
+                t, x, y = int(v[0] * 10), v[1], v[2]
+                self.before_traj[t][k] = [x, y]
+            
 
     def switchScenario(self, idx):
         self.loadScenario(idx)

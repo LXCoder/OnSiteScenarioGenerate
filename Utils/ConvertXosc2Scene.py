@@ -23,18 +23,22 @@ def _calculate_average_speed(path, times):
 
 
 def _parse_trajectory_vertices(traj_elem, start_time=START_TIME_THRESHOLD):
-    """提取坐标路径并过滤掉早于 start_time 的点"""
-    path, times = [], []
+    """提取坐标路径，并分离早于 start_time 和晚于/等于 start_time 的点"""
+    path_after, times_after = [], []
+    path_before, times_before = [], []
+
     for vertex in traj_elem.iter("Vertex"):
         t = float(vertex.get("time"))
-        if t < start_time:
-            continue
-
         pos = vertex.find("Position/WorldPosition")
         if pos is not None:
-            path.append([float(pos.get("x")), float(pos.get("y"))])
-            times.append(t)
-    return path, times
+            point = [float(pos.get("x")), float(pos.get("y"))]
+            if t < start_time:
+                path_before.append(point)
+                times_before.append(t)
+            else:
+                path_after.append(point)
+                times_after.append(t)
+    return path_after, times_after, path_before, times_before
 
 
 def _get_trajectory_element(action_elem):
@@ -193,18 +197,26 @@ def parse_xosc(file_path):
             if traj_elem is None:
                 continue
 
-            path, times = _parse_trajectory_vertices(traj_elem)
-            if not path:
+            path_after_threshold, times_after_threshold, path_before_threshold, times_before_threshold = _parse_trajectory_vertices(traj_elem)
+            if not path_after_threshold and not path_before_threshold:
                 continue
 
-            avg_speed = _calculate_average_speed(path, times)
+            avg_speed = _calculate_average_speed(path_after_threshold, times_after_threshold) if path_after_threshold else 0.0
+            if avg_speed == 0.0 and path_before_threshold:
+                # If no 'after' path, calculate speed from 'before' path
+                avg_speed = _calculate_average_speed(path_before_threshold, times_before_threshold)
+
+            # Combine time and coordinates for initial_raw_path
+            combined_initial_raw_path = []
+            for i in range(len(path_before_threshold)):
+                combined_initial_raw_path.append([times_before_threshold[i], path_before_threshold[i][0], path_before_threshold[i][1]])
 
             for actor_name in actors:
                 is_ego = "Ego" in actor_name
                 vehicle_key = "ego" if is_ego else actor_name.lower().replace("a","car_")
                 all_vehicles[vehicle_key] = {
-                    "path": path,
-                    # "path": get_smart_waypoints(path, 0.3, 3),
+                    "path": path_after_threshold,
+                    "initial_raw_path": combined_initial_raw_path, # Store pre-threshold data with time
                     "speed": round(avg_speed, 2),
                     "color": "#14c704" if is_ego else "#3498db",
                     "control": "model",
