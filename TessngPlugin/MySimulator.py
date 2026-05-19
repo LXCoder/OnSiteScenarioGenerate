@@ -45,7 +45,8 @@ from Utils.Constant import (
     MAX_STEER_DELTA,
     REPEAT_SINGLE_SCENARIO,
     EXIT_ON_SIMULATION_STOP,
-    TRAJ_OUTPUT
+    TRAJ_OUTPUT,
+    USE_TEST_LOGIC
 )
 
 
@@ -171,7 +172,8 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.csv_writer.writerow(self.csv_header)
         self.log_data_list = []  # 清空缓存，准备记录新一轮数据
         # 插入前 31 帧的数据
-        self._insert_before_traj()
+        if not USE_TEST_LOGIC:
+            self._insert_before_traj()
 
 
     def _insert_before_traj(self):
@@ -234,7 +236,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.csv_header.append('end')
 
     def _close_csv_writer(self):
-        if self.csv_writer:
+        if not TRAIN_MODE and self.csv_writer:
             self.csv_writer.writerows(self.log_data_list)
             self.log_file.close()
             self.log_file = None
@@ -771,6 +773,8 @@ class MySimulator(QObject, PyCustomerSimulator):
                 continue
 
             if hasattr(self, "bgModel") and self.bgModel is not None:
+                # tood: 检查背景车是否到达终点,如到达，将其移除
+
                 obs, _ = self.buildObs(v, vehicles)
                 action, _ = self.bgModel.predict(obs, deterministic=True)
 
@@ -1239,6 +1243,7 @@ class MySimulator(QObject, PyCustomerSimulator):
     def createTessngBgRouting(self, name, agent):
         """创建 TESSNG single routing 来控制背景车辆"""
         if name in self.tessngBgRoutingByName:
+            print(f"已存在，跳过创建 [{name}]")
             return True
 
         netIface = self.netIface or tessngIFace().netInterface()
@@ -1362,7 +1367,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             if not lane_connector:
                 return False
             dispatch_point = netIface.createDispatchPoint(
-                connector, first_wp.distToStart()
+                lane_connector, first_wp.distToStart()
             )
 
         # 发车点创建失败
