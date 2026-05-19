@@ -84,7 +84,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 获取场景数据
         self.scenarios = g_scenario_loader.getScenarios().copy()
         self.scenario_indices = []  # 用来存放洗牌后的索引队列
-        self.all_vehi_names = []
+        self.all_bgvehi_names = []
         self._egoInfo = None  # 当前场景中 ego 的配置信息
         self.is_create_ego_routing = False
 
@@ -136,6 +136,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.log_data_list = [] # 用于缓存每帧数据
         self.before_traj = []
         self.csv_header = ['time', 'acc', 'rot', 'x_ego', 'y_ego', 'v_ego', 'a_ego', 'yaw_ego', 'rot_ego', 'width_ego', 'length_ego', 'end']
+        self.all_bgvehi_names = []
 
         # 多模型配置
         self.egoModel = None
@@ -195,7 +196,7 @@ class MySimulator(QObject, PyCustomerSimulator):
                 0.0,  # length_ego
             ]
             # bg vehicle
-            for vehi_name in self.all_vehi_names:
+            for vehi_name in self.all_bgvehi_names:
                 if vehi_name == "ego":
                     continue
                 
@@ -225,7 +226,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 排序背景车名称，确保每次生成的 CSV 列顺序一致
             sorted_bg_names = sorted(self.bgAgents.keys(), key=lambda x: int(x.split('_')[-1]) if '_' in x else x)
             # 保存所有背景车的 name
-            self.all_vehi_names = sorted_bg_names
+            self.all_bgvehi_names = sorted_bg_names
             for name in sorted_bg_names:
                 # 提取数字ID作为列名后缀，例如 'car_1' -> '1'
                 key_suffix = name.split('_')[-1] if '_' in name else name
@@ -766,15 +767,18 @@ class MySimulator(QObject, PyCustomerSimulator):
             vsMap[self.egoName] = self.egoState
 
         # 2. 控制所有背景车 (使用背景车专用模型)
+        bgVehi_running = []
         for v in bgVehicles:
             avName = self.tessAuto.tessngId2AvNameMap.get(v.id())
             agent = self.bgAgents.get(avName)
             if not agent or "state" not in agent:
                 continue
 
-            if hasattr(self, "bgModel") and self.bgModel is not None:
-                # tood: 检查背景车是否到达终点,如到达，将其移除
+            if self._isBgVehicleReachedEnd(avName, v, None, 1.0):
+                self._removeBgVehicle(avName, reason="背景车到达轨迹终点")
+                continue
 
+            if hasattr(self, "bgModel") and self.bgModel is not None:
                 obs, _ = self.buildObs(v, vehicles)
                 action, _ = self.bgModel.predict(obs, deterministic=True)
 
@@ -803,6 +807,8 @@ class MySimulator(QObject, PyCustomerSimulator):
                     print(
                         f"[推理 Step {self._inferStep}] 背景车 {avName} 推理中... 当前速度: {st.speed:.2f} m/s 当前朝向: {st.heading:.2f}"
                     )
+            # 目前在运行的车辆
+            bgVehi_running.append(v)
 
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
         if is_debug_info:
@@ -834,7 +840,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         sorted_bg_names = sorted(self.bgAgents.keys(), key=lambda x: int(x.split('_')[-1]) if '_' in x else x)
         
         # Create a map of active TESSNG vehicles keyed by their agent name for easier lookup
-        active_bg_veh_map_by_agent_name = {self.tessAuto.tessngId2AvNameMap.get(v.id()): v for v in bgVehicles}
+        active_bg_veh_map_by_agent_name = {self.tessAuto.tessngId2AvNameMap.get(v.id()): v for v in bgVehi_running}
 
         for name in sorted_bg_names:
             bg_tessng_veh = active_bg_veh_map_by_agent_name.get(name) # Get vehicle from tessng ID map using agent name
@@ -893,7 +899,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         # 碰撞检测
         ego_id = egoVehicle.id()
-        for v in vehicles:
+        for v in bgVehi_running:
             if v.id() != ego_id:
                 if self._check_bbox_collision_vehi(egoVehicle, v):
                     self._is_collision = True
@@ -1230,6 +1236,67 @@ class MySimulator(QObject, PyCustomerSimulator):
         """判断指定背景车是否由 TESSNG single routing 控制"""
         agent = self.bgAgents.get(name)
         return bool(agent and agent.get("controlMode") == "tessng")
+
+    def _isBgVehicleReachedEnd(self, name, vehicle, state=None, tolerance=2.0):
+        """判断背景车是否到达自身参考路径终点。"""
+        agent = self.bgAgents.get(name)
+        if not agent:
+            return False
+
+        smoothed = agent.get("smoothed") or []
+        if len(smoothed) < 2:
+            return False
+
+        if state is not None:
+            x = getattr(state, "x", None)
+            y = getattr(state, "y", None)
+        else:
+            pos = vehicle.pos()
+            x = p2m(pos.x())
+            y = p2m(pos.y())
+
+        if x is None or y is None:
+            return False
+
+        s_ego, s_total, _, _ = self._getFrenetProgress(smoothed, x, -y)
+        if s_total <= 0.0:
+            return False
+
+        return (s_total - s_ego) <= tolerance
+
+    def _removeBgVehicle(self, name, reason=""):
+        """停止并移除已经完成任务的背景车。"""
+        if not name:
+            return
+
+        if reason:
+            print(f"[BG] {name} {reason}，移除车辆。")
+
+        ptr = self.tessAuto.mainVehiclePtrDict.get(name)
+        if ptr:
+            try:
+                main_vehi = ptr.get()
+                i_vehi = main_vehi.getVehicle() if main_vehi else None
+                if i_vehi:
+                    i_vehi.vehicleDriving().stopVehicle()
+            except Exception as exc:
+                print(f"[BG] 停止车辆 {name} 失败: {exc}")
+
+        routing = self.tessngBgRoutingByName.pop(name, None)
+        if routing:
+            try:
+                simIface = self.simIface or tessngIFace().simuInterface()
+                netIface = self.netIface or tessngIFace().netInterface()
+                if simIface:
+                    for vehicle in simIface.getVehiclesOnSingleRouting(routing.id()):
+                        vehicle.vehicleDriving().stopVehicle()
+                if netIface:
+                    netIface.removeSingleRouting(routing)
+            except Exception as exc:
+                print(f"[BG] 清理 routing {name} 失败: {exc}")
+
+        self.removeExternalBgControl(name)
+        self.bgAgents.pop(name, None)
 
     def createTessngBgVehicle(self, name, agent):
         """创建 TESSNG 驱动的背景车"""
@@ -2217,4 +2284,3 @@ class MySimulator(QObject, PyCustomerSimulator):
                 break  # 找到 ego ，退出循环
     
         return True
-
