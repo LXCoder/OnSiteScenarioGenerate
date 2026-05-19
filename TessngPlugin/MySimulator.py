@@ -2,6 +2,7 @@ import math
 import os
 import threading
 import numpy as np
+import time
 import csv
 from datetime import datetime
 from enum import Enum
@@ -56,6 +57,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         COLLISION = 3
         OUTBOUND = 4
         DEVIATE_LANE = 5
+        ROUTING_FAILED = 6
 
     sig_stop_simu = Signal()
 
@@ -83,6 +85,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.scenario_indices = []  # 用来存放洗牌后的索引队列
         self.all_vehi_names = []
         self._egoInfo = None  # 当前场景中 ego 的配置信息
+        self.is_create_ego_routing = False
 
         # 当前场景
         self.currentScenarioIdx = 0
@@ -146,6 +149,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.EgoStatus.COLLISION: "与背景车发生碰撞",
             self.EgoStatus.OUTBOUND: "驶出地图边界",
             self.EgoStatus.DEVIATE_LANE: "偏离车道",
+            self.EgoStatus.ROUTING_FAILED: "轨迹规划失败"
         }
 
     def _init_csv_writer(self):
@@ -229,6 +233,14 @@ class MySimulator(QObject, PyCustomerSimulator):
         
         self.csv_header.append('end')
 
+    def _close_csv_writer(self):
+        if self.csv_writer:
+            self.csv_writer.writerows(self.log_data_list)
+            self.log_file.close()
+            self.log_file = None
+            self.csv_writer = None
+        self.log_data_list = [] # 清空缓存
+
     # ============================================================
     #  Tessng 生命周期
     # ============================================================
@@ -246,10 +258,23 @@ class MySimulator(QObject, PyCustomerSimulator):
         self.stepCount = 0
 
         # 生成 ego 途径点
-        self._generateEgoWaypoints()
+        self.is_create_ego_routing = self._generateEgoWaypoints()
 
         if self.scenarios:
             self.loadScenario(0)
+        
+        if not self.is_create_ego_routing:
+            self._inferStep = 0
+            self._init_csv_writer()
+            self.egoFinishStatus = self.EgoStatus.ROUTING_FAILED
+            if self.log_data_list:
+                self.log_data_list[-1][-1] = self.egoFinishStatus.value
+            else:
+                self.log_data_list.append([''] * (len(self.csv_header) -1) + [self.egoFinishStatus.value]) # add an empty row with just the status
+            self._close_csv_writer()
+            print("[Ego Failed] 生成 ego 途经点失败，结束仿真")
+            self.sig_stop_simu.emit()
+            return
 
         if self.trainThread is None or not self.trainThread.is_alive():
             self.trainThread = threading.Thread(target=self.runTraining, daemon=True)
@@ -260,6 +285,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.tessAuto.vehicleUpdate(pIVehicle)
 
     def afterOneStep(self):
+        if not self.is_create_ego_routing:
+            return
+
         simuIface = self.simIface or tessngIFace().simuInterface()
         vehicles = simuIface.allVehiStarted()
         activeIds = {v.id() for v in vehicles}
@@ -302,6 +330,8 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         if EXIT_ON_SIMULATION_STOP:
             QCoreApplication.quit()
+            print("正在关闭程序.....")
+            time.sleep(1)
 
     def afterPause(self):
         print("[MySimulator] 仿真暂停")
@@ -902,12 +932,8 @@ class MySimulator(QObject, PyCustomerSimulator):
             else: # 如果没有任何数据被记录，也要加一个结束状态
                 self.log_data_list.append([''] * (len(self.csv_header) -1) + [self.egoFinishStatus.value]) # add an empty row with just the status
 
-            if self.csv_writer:
-                self.csv_writer.writerows(self.log_data_list)
-                self.log_file.close()
-                self.log_file = None
-                self.csv_writer = None
-            self.log_data_list = [] # 清空缓存
+            # 写入轨迹到 csv 文件
+            self._close_csv_writer()
 
             if REPEAT_SINGLE_SCENARIO:
                 self.clearTessngBgVehicles()
@@ -2049,7 +2075,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         if not self.setupTessngRoutingDispatch(start_point, waypoints):
             print(f"[TESSNG Ego] 创建 routing 失败: 发车点创建失败")
-            return []
+            return None
 
         param = Online.DynaSingleRoutingParam()
         param.level = "lane"
@@ -2060,7 +2086,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         routing = netIface.createSingleRouting(param, waypoints)
         if not routing:
             print(f"[TESSNG Ego] 创建 single routing 失败")
-            return []
+            return None
 
         print(
             f"[TESSNG Ego] 使用 TESSNG single routing 控制, routing_id={routing.id()}"
@@ -2167,20 +2193,23 @@ class MySimulator(QObject, PyCustomerSimulator):
                 if not info:
                     continue
                 
-                # start_point = vehi["path"][0]
-                # info["initial_state"]["x"] = start_point[0]
-                # info["initial_state"]["y"] = -start_point[1]
+                # 使用 第 30 帧的 ego 状态创建主车
+                start_point = vehi["path"][0]
+                info["initial_state"]["x"] = start_point[0]
+                info["initial_state"]["y"] = -start_point[1]
                 # print(f"aaa: {start_point}")
 
                 ego_waypoints = self._createEgoRouting(info)
                 
-                print(f"[TESSNG Ego] 路由包含 {len(ego_waypoints)} 个点\n{ego_waypoints}")
 
-                if ego_waypoints.shape[0] > 0:
+                if ego_waypoints is not None and ego_waypoints.shape[0] > 0:
+                    print(f"[TESSNG Ego] 路由包含 {len(ego_waypoints)} 个点\n{ego_waypoints}")
                     waypoints = [[pt[0], pt[1]] for pt in ego_waypoints]
                     vehi["path"] = waypoints
                 else:
-                    pass
+                    return False
 
                 break  # 找到 ego ，退出循环
+    
+        return True
 
