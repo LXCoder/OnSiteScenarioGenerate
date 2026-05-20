@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sqlite3
 import tempfile
 import uuid
 import zipfile
@@ -11,7 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+import pymysql
+from pymysql.cursors import DictCursor
 from werkzeug.utils import secure_filename
+
+from ..extensions import db
+from ..models.task import Task
 
 
 TASK_STATUSES = {
@@ -40,6 +44,13 @@ def _load_json_maybe(value: Any) -> Any:
 
 
 @dataclass(slots=True)
+class AccessContext:
+    user_id: str | None
+    username: str | None = None
+    is_admin: bool = False
+
+
+@dataclass(slots=True)
 class TaskPaths:
     task_dir: Path
     upload_dir: Path
@@ -51,91 +62,88 @@ class TaskPaths:
 
 
 class TaskRepository:
-    def __init__(self, database_path: Path):
-        self.database_path = Path(database_path)
+    def __init__(self, config: Any):
+        self.host = str(config["MYSQL_HOST"])
+        self.port = int(config["MYSQL_PORT"])
+        self.user = str(config["MYSQL_USER"])
+        self.password = str(config["MYSQL_PASSWORD"])
+        self.database = str(config["MYSQL_DATABASE"])
+        self.charset = str(config.get("MYSQL_CHARSET", "utf8mb4"))
 
-    def _connect(self) -> sqlite3.Connection:
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.database_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA foreign_keys=ON;")
-        return conn
+    def _connect(self, *, with_database: bool = True):
+        kwargs = {
+            "host": self.host,
+            "port": self.port,
+            "user": self.user,
+            "password": self.password,
+            "charset": self.charset,
+            "cursorclass": DictCursor,
+            "autocommit": False,
+        }
+        if with_database:
+            kwargs["database"] = self.database
+        return pymysql.connect(**kwargs)
 
     def init_db(self) -> None:
-        schema = """
-        CREATE TABLE IF NOT EXISTS tasks (
-            task_id TEXT PRIMARY KEY,
-            name TEXT,
-            status TEXT NOT NULL,
-            create_time TEXT NOT NULL,
-            start_time TEXT,
-            finish_time TEXT,
-            batch_config_path TEXT NOT NULL,
-            request_json TEXT NOT NULL,
-            log_dir TEXT NOT NULL,
-            output_dir TEXT NOT NULL,
-            message TEXT DEFAULT '',
-            exit_code INTEGER,
-            cancel_requested INTEGER NOT NULL DEFAULT 0
-        )
-        """
-        with self._connect() as conn:
-            conn.execute(schema)
+        # 如数据库不存在，创建数据库
+        with self._connect(with_database=False) as conn:
+            with conn.cursor() as cursor:
+                sql_create_database = f"CREATE DATABASE IF NOT EXISTS `{self.database}` CHARACTER SET {self.charset}"
+                cursor.execute(sql_create_database)
             conn.commit()
 
+        db.create_all()
+
     def create_task(self, record: dict[str, Any]) -> dict[str, Any]:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO tasks (
-                    task_id, name, status, create_time, batch_config_path,
-                    request_json, log_dir, output_dir, message, cancel_requested
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record["task_id"],
-                    record.get("name"),
-                    record["status"],
-                    record["create_time"],
-                    record["batch_config_path"],
-                    record["request_json"],
-                    record["log_dir"],
-                    record["output_dir"],
-                    record.get("message", ""),
-                    int(record.get("cancel_requested", False)),
-                ),
-            )
-            conn.commit()
+        task = Task(
+            task_id=record["task_id"],
+            user_id=record["user_id"],
+            name=record.get("name"),
+            status=record["status"],
+            create_time=record["create_time"],
+            batch_config_path=record["batch_config_path"],
+            request_json=record["request_json"],
+            log_dir=record["log_dir"],
+            output_dir=record["output_dir"],
+            message=record.get("message", ""),
+            cancel_requested=bool(record.get("cancel_requested", False)),
+        )
+        db.session.add(task)
+        db.session.commit()
         return self.get_task(record["task_id"])
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM tasks WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
-            return self._row_to_dict(row) if row else None
+        task = db.session.get(Task, task_id)
+        return task.to_dict() if task else None
 
     def list_tasks(self) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM tasks ORDER BY create_time DESC"
-            ).fetchall()
-            return [self._row_to_dict(row) for row in rows]
+        tasks = db.session.query(Task).order_by(Task.create_time.desc()).all()
+        return [task.to_dict() for task in tasks]
+
+    def list_tasks_by_user(self, user_id: str) -> list[dict[str, Any]]:
+        tasks = (
+            db.session.query(Task)
+            .filter(Task.user_id == user_id)
+            .order_by(Task.create_time.desc())
+            .all()
+        )
+        return [task.to_dict() for task in tasks]
 
     def list_pending_tasks(self) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM tasks WHERE status = 'PENDING' ORDER BY create_time ASC"
-            ).fetchall()
-            return [self._row_to_dict(row) for row in rows]
+        tasks = (
+            db.session.query(Task)
+            .filter(Task.status == "PENDING")
+            .order_by(Task.create_time.asc())
+            .all()
+        )
+        return [task.to_dict() for task in tasks]
 
     def update_task(self, task_id: str, **fields: Any) -> dict[str, Any] | None:
         if not fields:
             return self.get_task(task_id)
 
         allowed = {
+            "user_id",
             "name",
             "status",
             "start_time",
@@ -152,21 +160,14 @@ class TaskRepository:
         if not updates:
             return self.get_task(task_id)
 
-        columns = ", ".join(f"{key} = ?" for key in updates)
-        values = list(updates.values()) + [task_id]
-        with self._connect() as conn:
-            conn.execute(
-                f"UPDATE tasks SET {columns} WHERE task_id = ?",
-                values,
-            )
-            conn.commit()
-        return self.get_task(task_id)
-
-    @staticmethod
-    def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
-        if row is None:
+        task = db.session.get(Task, task_id)
+        if not task:
             return None
-        return dict(row)
+
+        for key, value in updates.items():
+            setattr(task, key, value)
+        db.session.commit()
+        return self.get_task(task_id)
 
 
 class TaskService:
@@ -196,13 +197,23 @@ class TaskService:
             archive_dir=archive_dir,
         )
 
-    def create_task(self, payload: dict[str, Any], uploads: Iterable[Any] | None = None) -> dict[str, Any]:
+    def create_task(
+        self,
+        payload: dict[str, Any],
+        uploads: Iterable[Any] | None = None,
+        *,
+        access: AccessContext,
+    ) -> dict[str, Any]:
+        if not access.user_id:
+            raise ValueError("user_id is required")
+
         task_id = self._generate_task_id()
         paths = self.build_task_paths(task_id)
 
         request_snapshot = {
             "payload": payload,
             "uploads": [],
+            "user_id": access.user_id,
         }
         if uploads:
             request_snapshot["uploads"] = self._save_uploads(paths.upload_dir, uploads)
@@ -213,6 +224,7 @@ class TaskService:
 
         record = {
             "task_id": task_id,
+            "user_id": access.user_id,
             "name": payload.get("name") or task_id,
             "status": "PENDING",
             "create_time": _utc_now(),
@@ -226,17 +238,32 @@ class TaskService:
         task = self.repository.create_task(record)
         return self._attach_runtime_fields(task)
 
-    def get_task(self, task_id: str) -> dict[str, Any] | None:
-        task = self.repository.get_task(task_id)
-        return self._attach_runtime_fields(task) if task else None
-
-    def list_tasks(self) -> list[dict[str, Any]]:
-        return [self._attach_runtime_fields(task) for task in self.repository.list_tasks()]
-
-    def cancel_task(self, task_id: str) -> dict[str, Any] | None:
+    def get_task(
+        self, task_id: str, *, access: AccessContext | None = None
+    ) -> dict[str, Any] | None:
         task = self.repository.get_task(task_id)
         if not task:
             return None
+        if access and not self._can_access_task(task, access):
+            return None
+        return self._attach_runtime_fields(task)
+
+    def list_tasks(self, *, access: AccessContext) -> list[dict[str, Any]]:
+        if access.is_admin:
+            tasks = self.repository.list_tasks()
+        else:
+            if not access.user_id:
+                return []
+            tasks = self.repository.list_tasks_by_user(access.user_id)
+        return [self._attach_runtime_fields(task) for task in tasks]
+
+    def cancel_task(
+        self, task_id: str, *, access: AccessContext
+    ) -> dict[str, Any] | None:
+        task = self.repository.get_task(task_id)
+        if not task or not self._can_access_task(task, access):
+            return None
+
         if task["status"] == "PENDING":
             return self.repository.update_task(
                 task_id,
@@ -245,7 +272,11 @@ class TaskService:
                 message="Cancelled before execution",
                 cancel_requested=1,
             )
-        return self.repository.update_task(task_id, cancel_requested=1, message="Cancel requested")
+        return self.repository.update_task(
+            task_id,
+            cancel_requested=1,
+            message="Cancel requested",
+        )
 
     def mark_running(self, task_id: str) -> dict[str, Any] | None:
         return self.repository.update_task(
@@ -282,9 +313,14 @@ class TaskService:
             return data
         raise ValueError("batch_config.json must contain a JSON array")
 
-    def build_download_archive(self, task_id: str) -> Path | None:
+    def build_download_archive(
+        self,
+        task_id: str,
+        *,
+        access: AccessContext,
+    ) -> Path | None:
         task = self.repository.get_task(task_id)
-        if not task:
+        if not task or not self._can_access_task(task, access):
             return None
 
         task_dir = Path(task["log_dir"]).parent
@@ -297,7 +333,9 @@ class TaskService:
             temp_path = Path(tmp_file.name)
 
         try:
-            with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(
+                temp_path, "w", compression=zipfile.ZIP_DEFLATED
+            ) as zf:
                 for rel_name in ("batch_config.json", "request.json"):
                     src = task_dir / rel_name
                     if src.exists():
@@ -311,7 +349,11 @@ class TaskService:
                         if file_path.is_file():
                             zf.write(
                                 file_path,
-                                arcname=str(Path(task_id) / folder_name / file_path.relative_to(folder)),
+                                arcname=str(
+                                    Path(task_id)
+                                    / folder_name
+                                    / file_path.relative_to(folder)
+                                ),
                             )
 
             shutil.move(str(temp_path), archive_path)
@@ -347,7 +389,9 @@ class TaskService:
 
         return normalized
 
-    def _save_uploads(self, upload_dir: Path, uploads: Iterable[Any]) -> list[dict[str, Any]]:
+    def _save_uploads(
+        self, upload_dir: Path, uploads: Iterable[Any]
+    ) -> list[dict[str, Any]]:
         saved: list[dict[str, Any]] = []
         for upload in uploads:
             filename = secure_filename(upload.filename or "")
@@ -364,7 +408,9 @@ class TaskService:
                     "field_name": getattr(upload, "name", ""),
                     "original_filename": upload.filename,
                     "stored_filename": target.name,
-                    "relative_path": str(target.relative_to(self.config["TASK_DATA_ROOT"])),
+                    "relative_path": str(
+                        target.relative_to(self.config["TASK_DATA_ROOT"])
+                    ),
                 }
             )
         return saved
@@ -381,13 +427,21 @@ class TaskService:
         suffix = uuid.uuid4().hex[:6]
         return f"task_{stamp}_{suffix}"
 
-    def _attach_runtime_fields(self, task: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _attach_runtime_fields(
+        self, task: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         if task is None:
             return None
         result = dict(task)
         result["batch_config"] = self._read_json_file(result["batch_config_path"])
         result["request"] = self._read_json_file(result["request_json"])
+        result["cancel_requested"] = bool(result.get("cancel_requested", 0))
         return result
+
+    def _can_access_task(self, task: dict[str, Any], access: AccessContext) -> bool:
+        if access.is_admin:
+            return True
+        return bool(access.user_id) and task.get("user_id") == access.user_id
 
     @staticmethod
     def _read_json_file(path: str) -> Any:
