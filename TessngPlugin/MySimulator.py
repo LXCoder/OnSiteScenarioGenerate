@@ -5,6 +5,7 @@ import numpy as np
 import time
 import csv
 from datetime import datetime
+from pathlib import Path
 from enum import Enum
 from scipy.interpolate import splev, splprep
 from PySide2.QtCore import QObject, QPointF, Signal, QCoreApplication
@@ -159,7 +160,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
 
         # 数据记录初始化
-        os.makedirs(TRAJ_OUTPUT, exist_ok=True)
+        traj_output = Path(TRAJ_OUTPUT)
+        traj_output.mkdir(parents=True, exist_ok=True)
+        
         basename = os.path.basename(self.scenarios[self.currentScenarioIdx]["file"])
         scenario_name = basename.split(".")[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -242,6 +245,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.log_file.close()
             self.log_file = None
             self.csv_writer = None
+            print(f"[TRAJ] Write traj to: {self.log_filepath}")
         self.log_data_list = [] # 清空缓存
 
     # ============================================================
