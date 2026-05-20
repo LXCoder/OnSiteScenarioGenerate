@@ -17,6 +17,29 @@ Environment variables:
 - `BACKEND_USE_DOCKER` default `false`
 - `BACKEND_DOCKER_IMAGE` Docker image used by the worker when Docker mode is enabled
 - `BACKEND_TASK_TIMEOUT` default `3600`
+- `BACKEND_MYSQL_HOST` default `127.0.0.1`
+- `BACKEND_MYSQL_PORT` default `3306`
+- `BACKEND_MYSQL_USER` default `root`
+- `BACKEND_MYSQL_PASSWORD` default empty
+- `BACKEND_MYSQL_DATABASE` default `onsite_backend`
+- `BACKEND_MYSQL_CHARSET` default `utf8mb4`
+- `BACKEND_JWT_SECRET_KEY` JWT 解码密钥
+- `BACKEND_JWT_ALGORITHMS` default `HS256`
+- `BACKEND_JWT_ISSUER` default `auth0`
+
+## Auth
+
+当前接口使用请求头承载最小身份信息：
+
+- `Token`
+
+权限规则：
+
+- 管理员可以查看、下载、取消所有任务
+- 普通用户只能查看、下载、取消自己创建的任务
+- 创建任务时会根据 `Token` 解析出的 `username` 查询 `user` 表，并将对应 `userId` 写入 `tasks.user_id`
+
+这些规则由统一认证包装器 [verification.py](/home/dt/workspace/OnSiteScenarioGenerate/backend/app/utils/verification.py) 处理，接口本身不再重复解析请求头。
 
 ## API
 
@@ -44,6 +67,12 @@ JSON 请求体示例：
 }
 ```
 
+请求头示例：
+
+```http
+Token: <jwt-token>
+```
+
 兼容字段：
 
 - `batch_items`
@@ -57,6 +86,7 @@ JSON 请求体示例：
 ```json
 {
   "task_id": "task_20260518123045_a1b2c3",
+  "user_id": "u_1001",
   "name": "demo-task",
   "status": "PENDING",
   "create_time": "2026-05-18T12:30:45.123456+00:00",
@@ -108,6 +138,7 @@ JSON 请求体示例：
   "items": [
     {
       "task_id": "task_20260518123045_a1b2c3",
+      "user_id": "u_1001",
       "name": "demo-task",
       "status": "RUNNING",
       "create_time": "2026-05-18T12:30:45.123456+00:00",
@@ -136,7 +167,7 @@ JSON 请求体示例：
 查询参数：
 
 - `stream`，可选值 `combined`、`stdout`、`stderr`，默认 `combined`
-- `tail`，返回最后多少行，默认 `200`
+- `tail`，返回最后多少行，默认 `200`。`<=0` 返回全部
 
 成功响应：`200 OK`，`text/plain`
 
@@ -176,3 +207,26 @@ JSON 请求体示例：
 ## Task storage
 
 Runtime data is stored under `backend/task_data/`.
+
+## Database
+
+后端已从 SQLite 切换到 MySQL。启动时会自动确保 `tasks` 表存在。
+
+用户认证依赖已有 `user` 表，定义见 [user.sql](/home/dt/workspace/OnSiteScenarioGenerate/backend/task_data/user.sql)。
+
+当前 `tasks` 表核心字段包括：
+
+- `task_id`
+- `user_id`
+- `name`
+- `status`
+- `create_time`
+- `start_time`
+- `finish_time`
+- `batch_config_path`
+- `request_json`
+- `log_dir`
+- `output_dir`
+- `message`
+- `exit_code`
+- `cancel_requested`
