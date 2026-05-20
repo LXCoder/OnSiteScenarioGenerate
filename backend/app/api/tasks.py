@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from flask import Blueprint, Response, current_app, jsonify, request, send_file
+from flask import Blueprint, Response, current_app, g, jsonify, request, send_file
+
+from ..utils.verification import require_access
 
 
 bp = Blueprint("tasks", __name__)
@@ -18,14 +19,16 @@ def _worker():
 
 
 @bp.post("/create")
+@require_access()
 def create_task():
+    access = g.access_context
     payload = request.get_json(silent=True) or {}
     if not payload:
         payload = {key: value for key, value in request.form.items()}
 
     uploads = [file_storage for _, file_storage in request.files.items(multi=True)]
     try:
-        task = _service().create_task(payload, uploads)
+        task = _service().create_task(payload, uploads, access=access)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -34,22 +37,28 @@ def create_task():
 
 
 @bp.get("")
+@require_access()
 def list_tasks():
-    tasks = _service().list_tasks()
+    access = g.access_context
+    tasks = _service().list_tasks(access=access)
     return jsonify({"items": tasks, "count": len(tasks)})
 
 
 @bp.get("/<task_id>")
+@require_access()
 def get_task(task_id: str):
-    task = _service().get_task(task_id)
+    access = g.access_context
+    task = _service().get_task(task_id, access=access)
     if not task:
         return jsonify({"error": "Task not found"}), 404
     return jsonify(task)
 
 
 @bp.get("/<task_id>/logs")
+@require_access()
 def get_logs(task_id: str):
-    task = _service().get_task(task_id)
+    access = g.access_context
+    task = _service().get_task(task_id, access=access)
     if not task:
         return jsonify({"error": "Task not found"}), 404
 
@@ -70,12 +79,14 @@ def get_logs(task_id: str):
 
 
 @bp.get("/<task_id>/download")
+@require_access()
 def download_task(task_id: str):
-    task = _service().get_task(task_id)
+    access = g.access_context
+    task = _service().get_task(task_id, access=access)
     if not task:
         return jsonify({"error": "Task not found"}), 404
 
-    archive_path = _service().build_download_archive(task_id)
+    archive_path = _service().build_download_archive(task_id, access=access)
     if not archive_path or not archive_path.exists():
         return jsonify({"error": "Archive not available"}), 404
 
@@ -88,16 +99,18 @@ def download_task(task_id: str):
 
 
 @bp.post("/<task_id>/cancel")
+@require_access()
 def cancel_task(task_id: str):
-    task = _service().get_task(task_id)
+    access = g.access_context
+    task = _service().get_task(task_id, access=access)
     if not task:
         return jsonify({"error": "Task not found"}), 404
 
-    ok = _worker().cancel(task_id)
+    ok = _worker().cancel(task_id, access=access)
     if not ok:
         return jsonify({"error": "Unable to cancel task"}), 400
 
-    return jsonify(_service().get_task(task_id))
+    return jsonify(_service().get_task(task_id, access=access))
 
 
 def _read_tail(path: Path, lines: int) -> str:
