@@ -25,6 +25,7 @@ class BaseRunner:
         batch_config_path: Path,
         stdout_path: Path,
         stderr_path: Path,
+        output_dir: Path,
         timeout_seconds: int | None,
         cancel_event: threading.Event,
     ) -> RunResult:
@@ -39,6 +40,7 @@ class LocalRunner(BaseRunner):
         batch_config_path: Path,
         stdout_path: Path,
         stderr_path: Path,
+        output_dir: Path,
         timeout_seconds: int | None,
         cancel_event: threading.Event,
     ) -> RunResult:
@@ -120,10 +122,17 @@ class LocalRunner(BaseRunner):
 
 
 class DockerRunner(BaseRunner):
-    def __init__(self, image: str, network_mode: str, workdir: str = "/workspace"):
+    def __init__(
+        self,
+        image: str,
+        network_mode: str,
+        cert_dir: str,
+        workdir: str = "/workspace",
+    ):
         self.image = image
         self.workdir = workdir
         self.network_mode = network_mode
+        self.cert_dir = cert_dir
 
     def run(
         self,
@@ -132,6 +141,7 @@ class DockerRunner(BaseRunner):
         batch_config_path: Path,
         stdout_path: Path,
         stderr_path: Path,
+        output_dir: Path,
         timeout_seconds: int | None,
         cancel_event: threading.Event,
     ) -> RunResult:
@@ -140,13 +150,23 @@ class DockerRunner(BaseRunner):
 
             client = docker.from_env()
             rel_config = batch_config_path.relative_to(workspace_root)
-            command = ["python", "main.py", "--batch-config", str(rel_config)]
+            # command = ["python", "main.py", "--batch-config", str(rel_config)]
+            command = ["python", "main.py", "--batch-config", "batch_config.json"]
 
             volumes = {
-                str(workspace_root): {"bind": self.workdir, "mode": "rw"},
+                # str(workspace_root): {"bind": self.workdir, "mode": "rw"},
                 "/usr/share/fonts": {"bind": "/usr/share/fonts", "mode": "rw"},
                 "/etc/fonts": {"bind": "/etc/fonts", "mode": "rw"},
                 "/tmp/.X11-unix": {"bind": "/tmp/.X11-unix", "mode": "rw"},
+                output_dir: {"bind": "/tmp/output", "mode": "rw"},
+                self.cert_dir: {
+                    "bind": f"{os.path.join(self.workdir, 'Cert')}",
+                    "mode": "rw",
+                },
+                batch_config_path: {
+                    "bind": os.path.join(self.workdir, batch_config_path.name),
+                    "mode": "rw",
+                },
             }
 
             container_kwargs: dict[str, Any] = {
@@ -171,6 +191,7 @@ class DockerRunner(BaseRunner):
 
             stdout_path.parent.mkdir(parents=True, exist_ok=True)
             stderr_path.parent.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
 
             stdout_file = open(stdout_path, "a", encoding="utf-8")
             stderr_file = open(stderr_path, "a", encoding="utf-8")
@@ -275,6 +296,7 @@ def build_runner(config: Any) -> BaseRunner:
                 image=image,
                 network_mode=str(config.get("BACKEND_DOCKER_NETWORK", "host")),
                 workdir=str(config.get("DOCKER_WORKDIR", "/workspace")),
+                cert_dir=str(config.get("TESSNG_CERT_DIR", "")),
             )
         except Exception:
             pass

@@ -77,6 +77,7 @@ class TaskWorker:
                     batch_config_path=Path(task["batch_config_path"]),
                     stdout_path=Path(task["log_dir"]) / "stdout.log",
                     stderr_path=Path(task["log_dir"]) / "stderr.log",
+                    output_dir=Path(task["output_dir"]),
                     timeout_seconds=int(self.config["DEFAULT_TIMEOUT_SECONDS"]),
                     cancel_event=cancel_event,
                 )
