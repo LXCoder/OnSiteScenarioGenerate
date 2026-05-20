@@ -157,7 +157,7 @@ def parse_xosc(file_path):
 
     ego_task = {}
     # 提取 v_init, x_init, y_init, heading_init
-    init_match = re.search(r"\[Initial State\] v_init = (.*?), x_init = (.*?), y_init = (.*?), heading_init = (.*?)-->", raw_content)
+    init_match = re.search(r"\[Initial State\] v_init = (.*?), x_init = (.*?), y_init = (.*?), (?:heading|h)_init = (.*?)-->", raw_content)
     if init_match:
         ego_task["initial_state"] = {
             "v": float(init_match.group(1).strip(', ')),
@@ -251,7 +251,7 @@ def parse_xosc(file_path):
 
 
 def main():
-    input_dir = "Data/prod/select/scenario_0ace9a1d"
+    input_dir = "Data/prod/select/scenario_0aa57007"
     output_dir = "Data/converted_scenes"
 
     os.makedirs(output_dir, exist_ok=True)
