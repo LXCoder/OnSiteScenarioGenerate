@@ -12,3 +12,9 @@ WorkSpace/
 .vscode
 Temp
 scripts
+traj_output
+
+# 忽略 SQLite 运行时产生的临时文件
+*.sqlite3-wal
+*.sqlite3-shm
+backend/task_data/task_*
