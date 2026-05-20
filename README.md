@@ -349,3 +349,20 @@ python main.py --batch-config your_batch_config.json
 如果某个任务中途异常退出，批量流程会直接停止，并返回非 0 状态码。
 
 另外，`RL_ALGO` 目前仍然写死在 `Utils/Constant.py` 里。如果后面需要按任务动态切换 `PPO/DQN`，建议再补一层环境变量支持。
+
+
+## 10. 后端服务
+
+项目新增了 [backend/README.md](/home/dt/workspace/OnSiteScenarioGenerate/backend/README.md) 作为后端服务根目录。
+
+后端当前提供：
+
+- `POST /tasks/create`
+- `GET /tasks`
+- `GET /tasks/<task_id>`
+- `GET /tasks/<task_id>/logs`
+- `GET /tasks/<task_id>/download`
+- `POST /tasks/<task_id>/cancel`
+
+后端运行入口是 `backend/run.py`，默认会把任务数据写到 `backend/task_data/`。
+接口输入输出细节见 [backend/README.md](/home/dt/workspace/OnSiteScenarioGenerate/backend/README.md)。
