@@ -366,3 +366,12 @@ python main.py --batch-config your_batch_config.json
 
 后端运行入口是 `backend/run.py`，默认会把任务数据写到 `backend/task_data/`。
 接口输入输出细节见 [backend/README.md](/home/dt/workspace/OnSiteScenarioGenerate/backend/README.md)。
+
+
+## 10. 构建容器
+```
+bash build_docker.sh [tag 号]
+bash build_docker.sh # 使用当前日期作为 tag 号，如 20260521
+```
+`Dockerfile`: 镜像构建文件
+`.dockerignore`： 容器构建执行 `COPY` 命令时，需要忽略掉的目录

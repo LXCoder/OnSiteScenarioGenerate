@@ -40,3 +40,6 @@ SimuResult/
 WorkSpace/
 TESS_AUTO_Interface_doc.md
 backend
+Data/prod
+Cert
+Data/converted_scenes
