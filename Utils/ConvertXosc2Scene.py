@@ -158,13 +158,14 @@ def parse_xosc(file_path):
     ego_task = {}
     # 提取 v_init, x_init, y_init, heading_init
     init_match = re.search(r"\[Initial State\] v_init = (.*?), x_init = (.*?), y_init = (.*?), (?:heading|h)_init = (.*?)-->", raw_content)
+    v, x, y, heading = 0.0, 0.0, 0.0, 0.0
     if init_match:
-        ego_task["initial_state"] = {
-            "v": float(init_match.group(1).strip(', ')),
-            "x": float(init_match.group(2).strip(', ')),
-            "y": float(init_match.group(3).strip(', ')),
-            "heading": float(init_match.group(4).strip(', '))
-        }
+        v = (float(init_match.group(1).strip(", ")))
+        x = (float(init_match.group(2).strip(", ")))
+        y = (float(init_match.group(3).strip(", ")))
+        heading = float(init_match.group(4).strip(", "))
+
+    ego_task["initial_state"] = {"v": v, "x": x, "y": y, "heading": heading}
 
     # 提取 x_target, y_target 范围
     target_match = re.search(r"\[Driving Task\] x_target = \((.*?)\), y_target = \((.*?)\)", raw_content)
@@ -251,12 +252,15 @@ def parse_xosc(file_path):
 
 
 def main():
-    input_dir = "Data/prod/select/scenario_0aa57007"
+    # input_dir = "Data/prod/select/scenario_0aa57007"
+    # subfix = ""
+    input_dir = "Data/prod/A/test/scenario_1eee3255"
+    subfix = "_gt"
     output_dir = "Data/converted_scenes"
 
     os.makedirs(output_dir, exist_ok=True)
 
-    xosc_files = glob(os.path.join(input_dir, "**/*.xosc"), recursive=True)
+    xosc_files = glob(os.path.join(input_dir, f"**/*{subfix}.xosc"), recursive=True)
     print(f"Found {len(xosc_files)} .xosc files.")
 
     for xosc_path in xosc_files:

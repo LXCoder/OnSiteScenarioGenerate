@@ -37,6 +37,7 @@ from Utils.Constant import (
     FILTER_SCENES,
     NET_ROOT,
     NET_PATH,
+    SCENARIO_SUBFIX
 )
 
 
@@ -110,7 +111,7 @@ class ScenarioLoader:
                 if file_item.endswith(".xodr"):
                     xodr_path = os.path.join(self.dataDir, file_item)
 
-                if file_item.endswith(".xosc"):
+                if file_item.endswith(f"{SCENARIO_SUBFIX}.xosc"):
                     xosc_path = os.path.join(self.dataDir, file_item)
 
                 if xodr_path and xosc_path:
@@ -127,7 +128,10 @@ class ScenarioLoader:
             else:
                 scenario = parse_xosc(filename)
                 basename = os.path.basename(filename)
-                tess_info = self._getTessForScene(basename.split(".")[0])
+                basename = basename.split(".")[0]
+                if basename.endswith("_gt") or basename.endswith("_exam"):
+                    basename = basename.rsplit('_', 1)[0]
+                tess_info = self._getTessForScene(basename)
                 if tess_info is None:
                     msg = f"[ScenarioLoader] 未找到场景 {basename} 对应的 TESS 路网信息"
                     print(msg)

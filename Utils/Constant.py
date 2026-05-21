@@ -77,6 +77,8 @@ TRAIN_MAX_STEPS = 1000
 USE_TEST_LOGIC = _get_env_bool("TESSNG_USE_TEST_LOGIC", False)
 # 设定open scenario的起始时间阈值（秒）
 START_TIME_THRESHOLD = 3.0
+# 场景文件后缀
+SCENARIO_SUBFIX = _get_env_str("SCENARIO_SUBFIX", "_gt")
 
 # 是否单一场景重复执行
 REPEAT_SINGLE_SCENARIO = _get_env_bool("TESSNG_REPEAT_SINGLE_SCENARIO", False)
@@ -86,4 +88,4 @@ EXIT_ON_SIMULATION_STOP = _get_env_bool("TESSNG_EXIT_ON_SIMULATION_STOP", True)
 MAX_TESSNG_VEHICLES = 0
 
 # 轨迹除数目录
-TRAJ_OUTPUT = _get_env_str("TRAJ_OUTPUT", "traj_output")
+TRAJ_OUTPUT = _get_env_str("TRAJ_OUTPUT", "/tmp/output/traj")
