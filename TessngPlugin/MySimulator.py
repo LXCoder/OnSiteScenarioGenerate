@@ -964,6 +964,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def runTraining(self):
         from Utils.Constant import EGO_MODEL_FILENAME, BG_MODEL_FILENAME
+        from Utils.Constant import EGO_MODEL_FULL_PATH, BG_MODEL_FULL_PATH
 
         os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
         # 训练模式下默认保存路径（当前正在训练的模型）
@@ -1029,8 +1030,14 @@ class MySimulator(QObject, PyCustomerSimulator):
             print(f"\n[训练] 完成! 模型: {savePath}")
 
         elif not TRAIN_MODE:
-            egoPath = os.path.join(MODEL_SAVE_DIR, EGO_MODEL_FILENAME)
-            bgPath = os.path.join(MODEL_SAVE_DIR, BG_MODEL_FILENAME)
+            egoPath = EGO_MODEL_FULL_PATH
+            bgPath = BG_MODEL_FULL_PATH
+            print(f"bgpath: {bgPath}")
+            if not egoPath:
+                egoPath = os.path.join(MODEL_SAVE_DIR, EGO_MODEL_FILENAME)
+
+            if not bgPath:
+                bgPath = os.path.join(MODEL_SAVE_DIR, BG_MODEL_FILENAME)
 
             print(f"[推理] 加载 Ego 模型: {egoPath}")
             print(f"[推理] 加载背景车模型: {bgPath}")

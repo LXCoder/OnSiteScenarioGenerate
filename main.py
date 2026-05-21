@@ -38,6 +38,33 @@ def build_parser():
     return parser
 
 
+def _gen_batch_item(
+    item,
+    name,
+    data_dir,
+    bg_model_filename,
+    bg_model_full_path,
+):
+    batch_item = {
+        "name": name,
+        "BG_MODEL_FILENAME": bg_model_filename,
+        "DATA_DIR": data_dir,
+        "USE_TEST_LOGIC": item.get("USE_TEST_LOGIC", False),
+        "EGO_MODEL_FILENAME": item.get("EGO_MODEL_FILENAME"),
+        "FILTER_SCENES": item.get("FILTER_SCENES"),
+        "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
+        "TRAIN_MODE": item.get("TRAIN_MODE"),
+        "TRAIN_TOTAL_TIMESTEPS": item.get("TRAIN_TOTAL_TIMESTEPS"),
+        "TRAJ_OUTPUT": item.get("TRAJ_OUTPUT"),
+    }
+
+    if bg_model_filename:
+        batch_item["BG_MODEL_FILENAME"] = bg_model_filename
+    if bg_model_full_path:
+        batch_item["BG_MODEL_FULL_PATH"] = bg_model_full_path
+
+    return batch_item
+
 def load_batch_configs(config_path):
     with open(config_path, "r", encoding="utf-8") as file:
         configs = json.load(file)
@@ -52,14 +79,18 @@ def load_batch_configs(config_path):
 
         net_path = item.get("NET_PATH")
         bg_model_filename = item.get("BG_MODEL_FILENAME")
+        bg_model_fullpath = item.get("BG_MODEL_FULL_PATH")
         data_dir = item.get("DATA_DIR")
 
         missing = [
             key
             for key, value in (
                 # ("NET_PATH", net_path),
-                ("BG_MODEL_FILENAME", bg_model_filename),
                 ("DATA_DIR", data_dir),
+                (
+                    "Only one: BG_MODEL_FILENAME or BG_MODEL_FULLPATH",
+                    (bg_model_filename or bg_model_fullpath),
+                ),
             )
             if not value
         ]
@@ -68,65 +99,65 @@ def load_batch_configs(config_path):
 
         is_use_test_logic = item.get("USE_TEST_LOGIC", False)
         if is_use_test_logic:
-            normalized.append(
-                {
-                    "name": item.get("name", f"scenario_{index:03d}"),
-                    "NET_PATH": net_path,
-                    "BG_MODEL_FILENAME": bg_model_filename,
-                    "DATA_DIR": data_dir,
-                    "EGO_MODEL_FILENAME": item.get("EGO_MODEL_FILENAME"),
-                    "FILTER_SCENES": item.get("FILTER_SCENES"),
-                    "USE_TEST_LOGIC": is_use_test_logic,
-                    "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
-                    "TRAIN_MODE": item.get("TRAIN_MODE"),
-                    "TRAIN_TOTAL_TIMESTEPS": item.get("TRAIN_TOTAL_TIMESTEPS"),
-                    "TRAJ_OUTPUT": item.get("TRAJ_OUTPUT"),
-                }
+            name = item.get("name", f"scenario_{index:03d}")
+            batch_item = _gen_batch_item(
+                item,
+                name=name,
+                data_dir=data_dir,
+                bg_model_filename=bg_model_filename,
+                bg_model_full_path=bg_model_fullpath,
             )
+            normalized.append(batch_item)
         else:
             sub_idx = 0
             for file_item in os.listdir(data_dir):
-                normalized.append(
-                    {
-                        "name": item.get("name", f"scenario_{index:03d}_{sub_idx:03d}"),
-                        "BG_MODEL_FILENAME": bg_model_filename,
-                        "DATA_DIR": os.path.join(data_dir, file_item),
-                        "EGO_MODEL_FILENAME": item.get("EGO_MODEL_FILENAME"),
-                        "FILTER_SCENES": item.get("FILTER_SCENES"),
-                        "USE_TEST_LOGIC": is_use_test_logic,
-                        "REPEAT_SINGLE_SCENARIO": item.get("REPEAT_SINGLE_SCENARIO"),
-                        "TRAIN_MODE": item.get("TRAIN_MODE"),
-                        "TRAIN_TOTAL_TIMESTEPS": item.get("TRAIN_TOTAL_TIMESTEPS"),
-                        "TRAJ_OUTPUT": item.get("TRAJ_OUTPUT"),
-                    }
+                name = item.get("name", f"scenario_{index:03d}_{sub_idx:03d}")
+                batch_item = _gen_batch_item(
+                    item,
+                    name=name,
+                    data_dir=os.path.join(data_dir, file_item),
+                    bg_model_filename=bg_model_filename,
+                    bg_model_full_path=bg_model_fullpath,
                 )
+                normalized.append(batch_item)
                 sub_idx += 1
 
     return normalized
 
 
 def apply_batch_env(env, config):
-    env["TESSNG_BG_MODEL_FILENAME"] = str(config["BG_MODEL_FILENAME"])
     env["TESSNG_DATA_DIR"] = str(config["DATA_DIR"])
     env["TESSNG_EXIT_ON_SIMULATION_STOP"] = "1"
 
-    if "NET_PATH" in config:
-        env["TESSNG_NET_PATH"] = str(config["NET_PATH"])
+    def foreach_env_key(env_keys, is_lower=False):
+        for k in env_keys:
+            env_v = config.get(k) or None
+            if not env_v:
+                continue
+            if is_lower:
+                env[f"TESSNG_{k}"] = str(env_v).lower()
+            else:
+                env[f"TESSNG_{k}"] = str(env_v)
 
-    if config.get("EGO_MODEL_FILENAME"):
-        env["TESSNG_EGO_MODEL_FILENAME"] = str(config["EGO_MODEL_FILENAME"])
+    env_keys = [
+        "BG_MODEL_FULL_PATH",
+        "BG_MODEL_FILENAME",
+        "NET_PATH",
+        "EGO_MODEL_FILENAME",
+    ]
+    env_keys_lower = [
+        "USE_TEST_LOGIC",
+        "REPEAT_SINGLE_SCENARIO",
+        "TRAIN_MODE",
+        "EGO_MODEL_FILENAME",
+    ]
+    foreach_env_key(env_keys)
+    foreach_env_key(env_keys_lower, is_lower=True)
+
     if config.get("FILTER_SCENES") is not None:
         env["TESSNG_FILTER_SCENES"] = json.dumps(
             config["FILTER_SCENES"], ensure_ascii=False
         )
-    if config.get("USE_TEST_LOGIC") is not None:
-        env["TESSNG_USE_TEST_LOGIC"] = str(config["USE_TEST_LOGIC"]).lower()
-    if config.get("REPEAT_SINGLE_SCENARIO") is not None:
-        env["TESSNG_REPEAT_SINGLE_SCENARIO"] = str(
-            config["REPEAT_SINGLE_SCENARIO"]
-        ).lower()
-    if config.get("TRAIN_MODE") is not None:
-        env["TESSNG_TRAIN_MODE"] = str(config["TRAIN_MODE"]).lower()
 
     if config.get("TRAIN_TOTAL_TIMESTEPS") is not None:
         env["TRAIN_TOTAL_TIMESTEPS"] = str(config["TRAIN_TOTAL_TIMESTEPS"])

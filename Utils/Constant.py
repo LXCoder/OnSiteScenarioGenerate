@@ -69,7 +69,10 @@ WHEEL_BASE = 2.8  # 轴距
 RL_ALGO = "PPO"
 MODEL_SAVE_DIR = "tessng_" + RL_ALGO.lower()
 EGO_MODEL_FILENAME = _get_env_str("TESSNG_EGO_MODEL_FILENAME", "model.zip")
+EGO_MODEL_FULL_PATH = _get_env_str("TESSNG_EGO_MODEL_FULL_PATH", "")
 BG_MODEL_FILENAME = _get_env_str("TESSNG_BG_MODEL_FILENAME", "model.zip.v6")
+BG_MODEL_FULL_PATH = _get_env_str("TESSNG_BG_MODEL_FULL_PATH", "")
+
 TENSORBOARD_LOG = "./Log/"
 TRAIN_MAX_STEPS = 1000
 
