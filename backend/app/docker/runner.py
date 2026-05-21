@@ -127,12 +127,14 @@ class DockerRunner(BaseRunner):
         image: str,
         network_mode: str,
         cert_dir: str,
+        scenario_dir: str,
         workdir: str = "/workspace",
     ):
         self.image = image
         self.workdir = workdir
         self.network_mode = network_mode
         self.cert_dir = cert_dir
+        self.scenario_dir = scenario_dir
 
     def run(
         self,
@@ -162,6 +164,10 @@ class DockerRunner(BaseRunner):
                 self.cert_dir: {
                     "bind": f"{os.path.join(self.workdir, 'Cert')}",
                     "mode": "rw",
+                },
+                self.scenario_dir: {
+                    "bind": f"{os.path.join(self.workdir, 'Data', 'prod')}",
+                    "mode": "ro",
                 },
                 batch_config_path: {
                     "bind": os.path.join(self.workdir, batch_config_path.name),
@@ -297,6 +303,7 @@ def build_runner(config: Any) -> BaseRunner:
                 network_mode=str(config.get("BACKEND_DOCKER_NETWORK", "host")),
                 workdir=str(config.get("DOCKER_WORKDIR", "/workspace")),
                 cert_dir=str(config.get("TESSNG_CERT_DIR", "")),
+                scenario_dir=str(config.get("DOCKER_SCENARIO_DIR", "")),
             )
         except Exception:
             pass

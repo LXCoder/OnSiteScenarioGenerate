@@ -10,6 +10,13 @@ from ..utils.verification import require_access
 bp = Blueprint("tasks", __name__)
 
 
+# 赛题类型映射字典
+TYPE_MAP = {
+    0: "A",
+    1: "B",
+    2: "C"
+}
+
 def _service():
     return current_app.extensions["task_service"]
 
@@ -22,11 +29,31 @@ def _worker():
 @require_access()
 def create_task():
     access = g.access_context
-    payload = request.get_json(silent=True) or {}
-    if not payload:
-        payload = {key: value for key, value in request.form.items()}
+    req_data = request.get_json(silent=True) or {}
+    if not req_data:
+        req_data = {key: value for key, value in request.form.items()}
 
     uploads = [file_storage for _, file_storage in request.files.items(multi=True)]
+
+    qtype = req_data.get("qtype", -1)  # 0 -> A, 1 -> B, 2 ->C
+    qname = req_data.get("name") or ""
+    bg_model = req_data.get("bg_model", "model.zip.v6")
+    is_train = req_data.get("is_train", False)
+
+    if not isinstance(qtype, int) or qtype not in TYPE_MAP:
+        return jsonify({"error": "不存在对应的类型的赛题"}), 400
+
+    payload = {
+        "name": qname,
+        "batch_items": [
+            {
+                "name": qname,
+                "BG_MODEL_FILENAME": bg_model,
+                "DATA_DIR": f"Data/prod/{TYPE_MAP[qtype]}/{'train' if is_train else 'test'}",
+            }
+        ],
+    }
+
     try:
         task = _service().create_task(payload, uploads, access=access)
     except Exception as exc:

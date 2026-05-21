@@ -24,13 +24,18 @@ class Config:
     TASK_DATA_ROOT = TASK_DATA_ROOT
     DEFAULT_TIMEOUT_SECONDS = int(os.getenv("BACKEND_TASK_TIMEOUT", "3600"))
     ENABLE_WORKER = _as_bool(os.getenv("BACKEND_ENABLE_WORKER"), True)
+    
+    # DOCKER
     USE_DOCKER = _as_bool(os.getenv("BACKEND_USE_DOCKER"), True)
     DOCKER_IMAGE = os.getenv("BACKEND_DOCKER_IMAGE", "").strip()
     DOCKER_WORKDIR = os.getenv("BACKEND_DOCKER_WORKDIR", "/app").strip() or "/app"
     DOCKER_NETWORK = os.getenv("BACKEND_DOCKER_NETWORK", "host").strip()
     DOCKER_MEM_LIMIT = os.getenv("BACKEND_DOCKER_MEM_LIMIT", "").strip()
     DOCKER_NANO_CPUS = int(os.getenv("BACKEND_DOCKER_NANO_CPUS", "0") or 0)
+    DOCKER_SCENARIO_DIR = os.getenv("BACKEND_SCENARIO_DIR","").strip()
     TESSNG_CERT_DIR = os.getenv("BACKEND_CERT_DIR","").strip()
+    
+    # MYSQL
     MYSQL_HOST = os.getenv("BACKEND_MYSQL_HOST", "127.0.0.1").strip()
     MYSQL_PORT = int(os.getenv("BACKEND_MYSQL_PORT", "3306"))
     MYSQL_USER = os.getenv("BACKEND_MYSQL_USER", "root").strip()
@@ -42,6 +47,8 @@ class Config:
         f"?charset={MYSQL_CHARSET}"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    
+    # JWT
     JWT_SECRET_KEY = os.getenv("BACKEND_JWT_SECRET_KEY", "").strip()
     JWT_ALGORITHMS = [
         item.strip()
