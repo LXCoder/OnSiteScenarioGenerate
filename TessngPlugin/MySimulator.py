@@ -1087,7 +1087,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 推理模式
         if not TRAIN_MODE:
             print("\n[推理] 初始化多车推理(备用)...")
-            self.multiInfer = MultiVehicleInference(savePath, algo=RL_ALGO)
+            self.multiInfer = MultiVehicleInference(egoPath, algo=RL_ALGO)
             for scenario in self.scenarios:
                 prefix = scenario["file"].replace(".json", "")
                 for name, info in scenario["vehicles"].items():
@@ -1115,6 +1115,7 @@ class MySimulator(QObject, PyCustomerSimulator):
     def loadScenario(self, idx):
         if idx >= len(self.scenarios):
             return
+        self.clearCurrentSceneVehicles()
         self.currentScenarioIdx = idx
         self.currentVehicles = self.scenarios[idx]["vehicles"]
         self.egoName = "ego"  # 切换场景前重置默认 Ego 名称
@@ -1183,9 +1184,13 @@ class MySimulator(QObject, PyCustomerSimulator):
         for name, info in self.currentVehicles.items():
             if name == self.egoName:
                 continue  # Ego 的路径已单独处理，不计入背景车
-
+            
             smoothed = MultiVehicleInference._smoothPath(info["path"], 1.0)
             totalLen = MultiVehicleInference._pathLength(smoothed)
+
+            if len(smoothed) < 2:
+                print(f"轨迹点数 < 2, 跳过车辆 [{name}] 的创建...")
+                continue
 
             # 初始化起点坐标
             init_x, init_y = smoothed[0] if smoothed else (0.0, 0.0)
@@ -1327,6 +1332,17 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         self.removeExternalBgControl(name)
         self.bgAgents.pop(name, None)
+
+    def clearCurrentSceneVehicles(self):
+        """切换场景前清理上一场景残留的背景车。"""
+        names = set(self.bgAgents.keys())
+        names.update(self.tessngBgRoutingByName.keys())
+        names.update(
+            name for name in self.tessAuto.alreadyLaunchedAvNameSet if name != self.egoName
+        )
+
+        for name in list(names):
+            self._removeBgVehicle(name, "切换场景")
 
     def createTessngBgVehicle(self, name, agent):
         """创建 TESSNG 驱动的背景车"""
