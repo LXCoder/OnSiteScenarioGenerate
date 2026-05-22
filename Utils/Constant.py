@@ -46,8 +46,9 @@ MAX_STEER_DELTA = 0.05
 MAX_ACC_DELTA = 1.0
 
 # ===== 配置 =====
-TRAIN_MODE = _get_env_bool("TESSNG_TRAIN_MODE", False)
-TOTAL_TIMESTEPS = int(_get_env_str("TRAIN_TOTAL_TIMESTEPS", "4000000"))
+TRAIN_MODE = _get_env_bool("TESSNG_TRAIN_MODE", True)
+TRAIN_MODE_USE_SHUFFLE = _get_env_bool("TESSNG_TRAIN_MODE_USE_SHUFFLE", False)
+TOTAL_TIMESTEPS = int(_get_env_str("TRAIN_TOTAL_TIMESTEPS", "40"))
 DATA_DIR = _get_env_str("TESSNG_DATA_DIR", "Data")
 # global filter scenes
 FILTER_SCENES = _get_env_list(

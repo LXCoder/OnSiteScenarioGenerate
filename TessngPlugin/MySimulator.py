@@ -47,7 +47,8 @@ from Utils.Constant import (
     REPEAT_SINGLE_SCENARIO,
     EXIT_ON_SIMULATION_STOP,
     TRAJ_OUTPUT,
-    USE_TEST_LOGIC
+    USE_TEST_LOGIC,
+    TRAIN_MODE_USE_SHUFFLE
 )
 
 
@@ -436,8 +437,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         egoVehicle, bgVehicles = self.findBgVehicle(vehicles)
 
         if egoVehicle is None:
+            print("[Ego] failed to find ego")
             return
-
+        
+        egoVehicle.setColor("#02f13e")
         self.stepCount += 1
 
         # 集中计算一次 Frenet 进度，供 Reward 和 Done 共用
@@ -974,10 +977,6 @@ class MySimulator(QObject, PyCustomerSimulator):
         from Utils.Constant import EGO_MODEL_FILENAME, BG_MODEL_FILENAME
         from Utils.Constant import EGO_MODEL_FULL_PATH, BG_MODEL_FULL_PATH
 
-        os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
-        # 训练模式下默认保存路径（当前正在训练的模型）
-        savePath = os.path.join(MODEL_SAVE_DIR, "model")
-
         if TRAIN_MODE and self.scenarios:
             numScenarios = len(self.scenarios)
             stepsPerScenario = TOTAL_TIMESTEPS // numScenarios
@@ -1028,12 +1027,19 @@ class MySimulator(QObject, PyCustomerSimulator):
                     tensorboard_log=TENSORBOARD_LOG,
                 )
 
-            # for i in range(numScenarios):
-            #     print(f"\n[训练] === 场景 {i}: {self.scenarios[i]['file']} ===")
-            #     self.switchScenario(i)
-            #     total_timestaps = TOTAL_TIMESTEPS * ratio[i]
-            #     model.learn(total_timesteps=total_timestaps , reset_num_timesteps=False)
-            model.learn(total_timesteps=TOTAL_TIMESTEPS, reset_num_timesteps=False)
+            if TRAIN_MODE_USE_SHUFFLE:
+                model.learn(total_timesteps=TOTAL_TIMESTEPS, reset_num_timesteps=False)
+            else:
+                for i in range(numScenarios):
+                    print(f"\n[训练] === 场景 {i}: {self.scenarios[i]['file']} ===")
+                    self.switchScenario(i)
+                    total_timestaps = stepsPerScenario
+                    model.learn(total_timesteps=total_timestaps , reset_num_timesteps=False)
+            os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+            # 训练模式下默认保存路径（当前正在训练的模型）
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            savePath = os.path.join(MODEL_SAVE_DIR, f"model_{timestamp}")
+
             model.save(savePath)
             print(f"\n[训练] 完成! 模型: {savePath}")
 
@@ -1096,6 +1102,9 @@ class MySimulator(QObject, PyCustomerSimulator):
 
             # 训练线程完成，不需要保持活着
             print("[推理] 训练线程退出，推理由 afterOneStep 主线程驱动")
+        
+        # 训练结束
+        self.sig_stop_simu.emit()
 
     # ============================================================
     #  场景管理
@@ -1562,14 +1571,15 @@ class MySimulator(QObject, PyCustomerSimulator):
             return
 
         if TRAIN_MODE:
-            # 如果队列空了，重新装填并洗牌
-            if not self.scenario_indices:
-                self.scenario_indices = list(range(len(self.scenarios)))
-                np.random.shuffle(self.scenario_indices)  # 随机打乱顺序
+            if  TRAIN_MODE_USE_SHUFFLE:
+                # 如果队列空了，重新装填并洗牌
+                if not self.scenario_indices:
+                    self.scenario_indices = list(range(len(self.scenarios)))
+                    np.random.shuffle(self.scenario_indices)  # 随机打乱顺序
 
-            # 从队列中取出一个场景索引
-            target_idx = self.scenario_indices.pop(0)
-            self.switchScenario(target_idx)
+                # 从队列中取出一个场景索引
+                target_idx = self.scenario_indices.pop(0)
+                self.switchScenario(target_idx)
         else:
             # 推理模式按顺序切换
             next_idx = self.currentScenarioIdx + 1

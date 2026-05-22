@@ -106,17 +106,12 @@ class ScenarioLoader:
             ]
 
         else:
-            xodr_path, xosc_path = None, None
+            xosc_path = None, None
             for file_item in os.listdir(self.dataDir):
-                if file_item.endswith(".xodr"):
-                    xodr_path = os.path.join(self.dataDir, file_item)
-
                 if file_item.endswith(f"{SCENARIO_SUBFIX}.xosc"):
                     xosc_path = os.path.join(self.dataDir, file_item)
-
-                if xodr_path and xosc_path:
                     jsonFiles.append(xosc_path)
-                    break
+                    
 
         jsonFiles = sorted(jsonFiles)
 
