@@ -1087,7 +1087,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         # 推理模式
         if not TRAIN_MODE:
             print("\n[推理] 初始化多车推理(备用)...")
-            self.multiInfer = MultiVehicleInference(egoPath, algo=RL_ALGO)
+            self.multiInfer = MultiVehicleInference(savePath, algo=RL_ALGO)
             for scenario in self.scenarios:
                 prefix = scenario["file"].replace(".json", "")
                 for name, info in scenario["vehicles"].items():
@@ -1299,7 +1299,7 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         return (s_total - s_ego) <= tolerance
 
-    def _removeBgVehicle(self, name, reason=""):
+    def _removeBgVehicle(self, name, reason="", remove_from_agents=False):
         """停止并移除已经完成任务的背景车。"""
         if not name:
             return
@@ -1331,7 +1331,8 @@ class MySimulator(QObject, PyCustomerSimulator):
                 print(f"[BG] 清理 routing {name} 失败: {exc}")
 
         self.removeExternalBgControl(name)
-        self.bgAgents.pop(name, None)
+        if remove_from_agents:
+            self.bgAgents.pop(name, None)
 
     def clearCurrentSceneVehicles(self):
         """切换场景前清理上一场景残留的背景车。"""
@@ -1342,7 +1343,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         )
 
         for name in list(names):
-            self._removeBgVehicle(name, "切换场景")
+            self._removeBgVehicle(name, "切换场景", remove_from_agents=True)
 
     def createTessngBgVehicle(self, name, agent):
         """创建 TESSNG 驱动的背景车"""
