@@ -977,6 +977,10 @@ class MySimulator(QObject, PyCustomerSimulator):
         from Utils.Constant import EGO_MODEL_FILENAME, BG_MODEL_FILENAME
         from Utils.Constant import EGO_MODEL_FULL_PATH, BG_MODEL_FULL_PATH
 
+        os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+        # 训练模式下默认保存路径（当前正在训练的模型）
+        savePath = os.path.join(MODEL_SAVE_DIR, "model")
+
         if TRAIN_MODE and self.scenarios:
             numScenarios = len(self.scenarios)
             stepsPerScenario = TOTAL_TIMESTEPS // numScenarios
@@ -1035,18 +1039,15 @@ class MySimulator(QObject, PyCustomerSimulator):
                     self.switchScenario(i)
                     total_timestaps = stepsPerScenario
                     model.learn(total_timesteps=total_timestaps , reset_num_timesteps=False)
-            os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
-            # 训练模式下默认保存路径（当前正在训练的模型）
+            
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            savePath = os.path.join(MODEL_SAVE_DIR, f"model_{timestamp}")
-
+            savePath = f"{savePath}_{timestamp}"
             model.save(savePath)
             print(f"\n[训练] 完成! 模型: {savePath}")
 
         elif not TRAIN_MODE:
             egoPath = EGO_MODEL_FULL_PATH
             bgPath = BG_MODEL_FULL_PATH
-            print(f"bgpath: {bgPath}")
             if not egoPath:
                 egoPath = os.path.join(MODEL_SAVE_DIR, EGO_MODEL_FILENAME)
 
@@ -1103,8 +1104,9 @@ class MySimulator(QObject, PyCustomerSimulator):
             # 训练线程完成，不需要保持活着
             print("[推理] 训练线程退出，推理由 afterOneStep 主线程驱动")
         
-        # 训练结束
-        self.sig_stop_simu.emit()
+        if TRAIN_MODE:
+            # 训练结束
+            self.sig_stop_simu.emit()
 
     # ============================================================
     #  场景管理
