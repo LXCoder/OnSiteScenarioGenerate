@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from ..config import TASK_DATA_ROOT
 
 
 @dataclass(slots=True)
@@ -128,6 +129,7 @@ class DockerRunner(BaseRunner):
         network_mode: str,
         cert_dir: str,
         scenario_dir: str,
+        model_path,
         workdir: str = "/workspace",
     ):
         self.image = image
@@ -135,6 +137,7 @@ class DockerRunner(BaseRunner):
         self.network_mode = network_mode
         self.cert_dir = cert_dir
         self.scenario_dir = scenario_dir
+        self.model_path = model_path
 
     def run(
         self,
@@ -174,6 +177,14 @@ class DockerRunner(BaseRunner):
                     "mode": "rw",
                 },
             }
+
+            if self.model_path:
+                full_path = os.path.join(TASK_DATA_ROOT, self.model_path)
+                volumes[full_path] = {
+                    "bind": os.path.join(self.workdir, self.model_path),
+                    "mode": "ro",
+                }
+            
 
             container_kwargs: dict[str, Any] = {
                 "image": self.image,
@@ -290,9 +301,14 @@ class DockerRunner(BaseRunner):
                 pass
 
 
-def build_runner(config: Any) -> BaseRunner:
+def build_runner(config: Any, upload_info: Any = None) -> BaseRunner:
     use_docker = bool(config.get("USE_DOCKER", False))
     image = str(config.get("DOCKER_IMAGE", "")).strip()
+
+    model_path = ""
+    if upload_info:
+        relativa_path = upload_info[0].get("relative_path", "")
+        model_path = relativa_path
 
     if use_docker and image:
         try:
@@ -304,6 +320,7 @@ def build_runner(config: Any) -> BaseRunner:
                 workdir=str(config.get("DOCKER_WORKDIR", "/workspace")),
                 cert_dir=str(config.get("TESSNG_CERT_DIR", "")),
                 scenario_dir=str(config.get("DOCKER_SCENARIO_DIR", "")),
+                model_path=model_path,
             )
         except Exception:
             pass

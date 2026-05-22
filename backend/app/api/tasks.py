@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import traceback
 
 from flask import Blueprint, Response, current_app, g, jsonify, request, send_file
 
@@ -35,7 +36,7 @@ def create_task():
 
     uploads = [file_storage for _, file_storage in request.files.items(multi=True)]
 
-    qtype = req_data.get("qtype", -1)  # 0 -> A, 1 -> B, 2 ->C
+    qtype = int(req_data.get("qtype", -1))  # 0 -> A, 1 -> B, 2 ->C
     qname = req_data.get("name") or ""
     bg_model = req_data.get("bg_model", "model.zip.v6")
     is_train = req_data.get("is_train", False)
@@ -57,7 +58,8 @@ def create_task():
     try:
         task = _service().create_task(payload, uploads, access=access)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 400
+        traceback.print_exc()
+        return jsonify({"error": "An internal error has occurred."}), 400
 
     _worker().enqueue(task["task_id"])
     return jsonify(task), 201

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import uuid
@@ -215,10 +216,17 @@ class TaskService:
             "uploads": [],
             "user_id": access.user_id,
         }
-        if uploads:
-            request_snapshot["uploads"] = self._save_uploads(paths.upload_dir, uploads)
 
         batch_items = self._extract_batch_items(payload)
+
+        if uploads:
+            request_snapshot["uploads"] = self._save_uploads(paths.upload_dir, uploads)
+            bg_model_fullpath = os.path.join(
+                str(self.config.get("DOCKER_WORKDIR", "/workspace")),
+                request_snapshot["uploads"][0]["relative_path"],
+            )
+            batch_items[0]["BG_MODEL_FULL_PATH"] = bg_model_fullpath
+
         self._write_json(paths.batch_config_path, batch_items)
         self._write_json(paths.request_path, request_snapshot)
 

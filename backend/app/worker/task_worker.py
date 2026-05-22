@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -76,7 +77,8 @@ class TaskWorker:
                     self._active_task = ActiveTask(task_id=task_id, cancel_event=cancel_event)
 
                 try:
-                    runner = build_runner(self.config)
+                    upload_info = self._get_upload_info(task["request_json"])
+                    runner = build_runner(self.config, upload_info)
                     result = runner.run(
                         workspace_root=Path(self.config["PROJECT_ROOT"]),
                         batch_config_path=Path(task["batch_config_path"]),
@@ -103,3 +105,8 @@ class TaskWorker:
                     with self._lock:
                         self._active_task = None
                     time.sleep(0.1)
+
+    def _get_upload_info(self, request_json):
+        with open(request_json, "r") as f:
+            req_data = json.load(f)
+            return req_data.get("uploads", [])
