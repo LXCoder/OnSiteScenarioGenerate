@@ -86,27 +86,26 @@ class TessAutoPyInterface(object):
 	def createTessngAutoAv(self, avName: str, state: VehicleState):
 		"""在 Tessng 中创建一辆自动驾驶车辆"""
 		autoInterface = self.iface.autoInterface()
+		if not autoInterface:
+			print(f"[ERROR] failed to get auto interface, autoInterface is {autoInterface}")
+			return -1
 
 		if avName in self.alreadyLaunchedAvNameSet:
 			return 0
 
 		vs = self.buildVehicleStatus(avName, state)
 
-		avVehiclePtr = None
-		if autoInterface:
-			avVehiclePtr = autoInterface.createExternalVehicle(vs)
-			print(f"avName {avName}, try to create av, point is [{state.x}, {-state.y}]")
+		avVehiclePtr = autoInterface.createExternalVehicle(vs)
+		print(f"avName {avName}, try to create av {avVehiclePtr.get()}, point is [{state.x}, {-state.y}]")
+		
+		if avVehiclePtr:
+			mainVehi = avVehiclePtr.get()
+			mainVehiId = mainVehi.id()
+
 			if avName == "ego":
 				veh = avVehiclePtr.getVehicle()
 				veh.setColor("#02f13e")
 				print(f"avName {avName}, set color to #fc0703")
-		else:
-			print("tessng auto interface is null")
-			return 1
-
-		if avVehiclePtr:
-			mainVehi = avVehiclePtr.get()
-			mainVehiId = mainVehi.id()
 
 			self.alreadyLaunchedTessngIdSet.add(mainVehiId)
 			self.alreadyLaunchedAvNameSet.add(avName)
