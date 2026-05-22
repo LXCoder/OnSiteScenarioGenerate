@@ -30,6 +30,19 @@ class TessAutoPyInterface(object):
 
 		self._removeAvNames = []
 
+	def Stop(self):
+		self.avChannel2AvMsgMap.clear()
+		self.avName2TessngIdMap.clear()
+		self.tessngId2AvNameMap.clear()
+
+		self.alreadyLaunchedAvIdSet.clear()
+		self.alreadyLaunchedAvNameSet.clear()
+		self.alreadyLaunchedTessngIdSet.clear()
+
+		self.mainVehiclePtrDict.clear()
+
+		self._removeAvNames.clear()
+
 	# ================================================================
 	#  写入数据
 	# ================================================================

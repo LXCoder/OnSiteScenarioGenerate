@@ -336,6 +336,8 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.csv_writer = None
             self.log_data_list = []
 
+        self._resetTessAuto()
+
         if EXIT_ON_SIMULATION_STOP:
             QCoreApplication.quit()
             print("正在关闭程序.....")
@@ -343,6 +345,10 @@ class MySimulator(QObject, PyCustomerSimulator):
 
     def afterPause(self):
         print("[MySimulator] 仿真暂停")
+
+    def _resetTessAuto(self):
+        '''清空tess auto 状态'''
+        self.tessAuto.Stop()
 
     # ============================================================
     #  主车更新
