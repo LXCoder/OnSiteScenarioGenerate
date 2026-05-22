@@ -770,7 +770,7 @@ class MySimulator(QObject, PyCustomerSimulator):
             self.egoState.y += self.egoState.speed * math.cos(h_rad) * self.dt
             vsMap[self.egoName] = self.egoState
 
-        # 2. 控制所有背景车 (使用背景车专用模型)
+        # 2. 判断背景车是否到达终点，如到达终点，移除车辆
         bgVehi_running = []
         for v in bgVehicles:
             avName = self.tessAuto.tessngId2AvNameMap.get(v.id())
@@ -782,37 +782,45 @@ class MySimulator(QObject, PyCustomerSimulator):
                 self._removeBgVehicle(avName, reason="背景车到达轨迹终点")
                 continue
 
-            if hasattr(self, "bgModel") and self.bgModel is not None:
-                obs, _ = self.buildObs(v, vehicles)
-                action, _ = self.bgModel.predict(obs, deterministic=True)
-
-                accel = np.clip(action[0], MAX_DECEL, MAX_ACCEL)
-                steer = np.clip(action[1], -MAX_STEER_ANGLE, MAX_STEER_ANGLE)
-
-                prev_accel, prev_steer = agent["prev_control"]
-                accel = np.clip(
-                    accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA
-                )
-                steer = np.clip(
-                    steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA
-                )
-                agent["prev_control"] = (float(accel), float(steer))
-
-                st = agent["state"]
-                st.speed = max(0.0, min(st.speed + float(accel) * self.dt, MAX_SPEED))
-                yaw_rate = (st.speed * math.tan(float(steer))) / WHEEL_BASE
-                st.heading = (st.heading + math.degrees(yaw_rate * self.dt)) % 360.0
-                h_rad = math.radians(st.heading)
-                st.x += st.speed * math.sin(h_rad) * self.dt
-                st.y += st.speed * math.cos(h_rad) * self.dt
-                vsMap[avName] = st
-
-                if is_debug_info:
-                    print(
-                        f"[推理 Step {self._inferStep}] 背景车 {avName} 推理中... 当前速度: {st.speed:.2f} m/s 当前朝向: {st.heading:.2f}"
-                    )
             # 目前在运行的车辆
             bgVehi_running.append(v)
+        
+        # 3. 控制所有背景车 (使用背景车专用模型)
+        for v in bgVehi_running:
+            if not hasattr(self, "bgModel") or self.bgModel is None:
+                continue
+            
+            avName = self.tessAuto.tessngId2AvNameMap.get(v.id())
+            agent = self.bgAgents.get(avName)
+
+            obs, _ = self.buildObs(v, bgVehi_running)
+            action, _ = self.bgModel.predict(obs, deterministic=True)
+
+            accel = np.clip(action[0], MAX_DECEL, MAX_ACCEL)
+            steer = np.clip(action[1], -MAX_STEER_ANGLE, MAX_STEER_ANGLE)
+
+            prev_accel, prev_steer = agent["prev_control"]
+            accel = np.clip(
+                accel, prev_accel - MAX_ACC_DELTA, prev_accel + MAX_ACC_DELTA
+            )
+            steer = np.clip(
+                steer, prev_steer - MAX_STEER_DELTA, prev_steer + MAX_STEER_DELTA
+            )
+            agent["prev_control"] = (float(accel), float(steer))
+
+            st = agent["state"]
+            st.speed = max(0.0, min(st.speed + float(accel) * self.dt, MAX_SPEED))
+            yaw_rate = (st.speed * math.tan(float(steer))) / WHEEL_BASE
+            st.heading = (st.heading + math.degrees(yaw_rate * self.dt)) % 360.0
+            h_rad = math.radians(st.heading)
+            st.x += st.speed * math.sin(h_rad) * self.dt
+            st.y += st.speed * math.cos(h_rad) * self.dt
+            vsMap[avName] = st
+
+            if is_debug_info:
+                print(
+                    f"[推理 Step {self._inferStep}] 背景车 {avName} 推理中... 当前速度: {st.speed:.2f} m/s 当前朝向: {st.heading:.2f}"
+                )
 
         self.tessAuto.setAvChannel2AvMsgMap(vsMap)
         if is_debug_info:
