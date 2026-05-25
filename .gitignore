@@ -18,6 +18,8 @@ traj_output
 *.sqlite3-wal
 *.sqlite3-shm
 backend/task_data/task_*
+backend/logs/
+
 
 Data/prod/
 Data/converted_scenes

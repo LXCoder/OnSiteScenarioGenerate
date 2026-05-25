@@ -14,6 +14,9 @@ Environment variables:
 - `BACKEND_HOST` default `0.0.0.0`
 - `BACKEND_PORT` default `5000`
 - `BACKEND_DEBUG` default `false`
+- `BACKEND_LOG_DIR` default `backend/logs`
+- `BACKEND_LOG_LEVEL` default `INFO`
+- `BACKEND_LOG_BACKUP_COUNT` default `14`
 - `BACKEND_USE_DOCKER` default `false`
 - `BACKEND_DOCKER_IMAGE` Docker image used by the worker when Docker mode is enabled
 - `BACKEND_TASK_TIMEOUT` default `3600`
@@ -26,6 +29,40 @@ Environment variables:
 - `BACKEND_JWT_SECRET_KEY` JWT 解码密钥
 - `BACKEND_JWT_ALGORITHMS` default `HS256`
 - `BACKEND_JWT_ISSUER` default `auth0`
+
+## Logging
+
+后端现在使用标准 `logging` 模块，日志会按天切分：
+
+- `backend.log`: 应用综合日志
+- `backend.error.log`: `WARNING` 及以上
+- `gunicorn.access.log`: Gunicorn 访问日志
+- `gunicorn.error.log`: Gunicorn 错误日志
+
+日志目录默认是 `backend/logs`，可通过 `BACKEND_LOG_DIR` 覆盖。默认保留 14 天，可通过 `BACKEND_LOG_BACKUP_COUNT` 调整。
+
+本地直接运行：
+
+```bash
+cd backend
+python run.py
+```
+
+生产环境建议使用：
+
+```bash
+cd backend
+gunicorn -c gunicorn.conf.py run:app
+```
+
+常用 Gunicorn 环境变量：
+
+- `BACKEND_GUNICORN_BIND` default `0.0.0.0:5000`
+- `BACKEND_GUNICORN_WORKERS` default `2`
+- `BACKEND_GUNICORN_WORKER_CLASS` default `sync`
+- `BACKEND_GUNICORN_TIMEOUT` default `120`
+- `BACKEND_GUNICORN_GRACEFUL_TIMEOUT` default `30`
+- `BACKEND_GUNICORN_KEEPALIVE` default `5`
 
 ## Auth
 
@@ -55,15 +92,8 @@ JSON 请求体示例：
 ```json
 {
   "name": "demo-task",
-  "batch_items": [
-    {
-      "name": "scene-a",
-      "NET_PATH": "Data/scenario_0a6bf824.tess",
-      "BG_MODEL_FILENAME": "model.zip.v6",
-      "DATA_DIR": "Data/test",
-      "USE_TEST_LOGIC": true
-    }
-  ]
+  "bg_model": "model.zip.v6",
+  "qtype": 0
 }
 ```
 
@@ -72,6 +102,15 @@ JSON 请求体示例：
 ```http
 Token: <jwt-token>
 ```
+
+`qtype`: 赛题类型
+  - 0: A
+  - 1: B
+  - 2: C
+
+`bg_model`: 使用 `/home/dt/workspace/OnSiteScenarioGenerate/tessng_ppo` 下的模型
+
+需要上传模型文件的，请使用表单 `form-data` 发起请求，其他字段和上述的 `json` 字段一样，`bg_model` 可以忽略。
 
 兼容字段：
 
@@ -125,6 +164,8 @@ Token: <jwt-token>
   "error": "Request must provide batch_items or batch_config"
 }
 ```
+
+注意：请详细查看 `OnSiteScenarioGenerate/backend/app/docker/runner.py:161` 拉起的 docker 容器挂在卷配置。
 
 ### `GET /tasks`
 
