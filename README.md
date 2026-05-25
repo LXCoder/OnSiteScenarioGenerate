@@ -360,6 +360,7 @@ python main.py --batch-config your_batch_config.json
 - `POST /tasks/create`
 - `GET /tasks`
 - `GET /tasks/<task_id>`
+- `GET /tasks/<task_id>/evaluation`
 - `GET /tasks/<task_id>/logs`
 - `GET /tasks/<task_id>/download`
 - `POST /tasks/<task_id>/cancel`
@@ -367,6 +368,27 @@ python main.py --batch-config your_batch_config.json
 后端运行入口是 `backend/run.py`，默认会把任务数据写到 `backend/task_data/`。
 接口输入输出细节见 [backend/README.md](/home/dt/workspace/OnSiteScenarioGenerate/backend/README.md)。
 
+### 生产环境后端启动方式
+```bash
+cd backend
+# 激活虚拟环境，使用 uv 管理虚拟环境
+source ~/.virtualenvs/onsite/bin/activate
+# 如果需新增第三方库
+uv pip install 第三方库名称
+# 启动后端，启动参数请看 gunicorn.conf.py
+gunicorn -c gunicorn.conf.py run:app
+```
+
+### 更新场景文件
+场景文件存放的目录为： `/root/_scenario_data`, 目录结构如下：
+```bash
+.
+├── A
+├── B
+└── C
+```
+分别存放 A,B,C 类型的场景
+可以通过 `backend/.env` 文件中的环境变量 `BACKEND_SCENARIO_DIR` 设置场景文件所在的目录
 
 ## 10. 构建容器
 ```

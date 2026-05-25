@@ -4,7 +4,8 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
+RUN pip install torch==1.10.2 -i https://mirrors.aliyun.com/pypi/simple -vv
+RUN pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple -vv
 
 COPY . .
 
