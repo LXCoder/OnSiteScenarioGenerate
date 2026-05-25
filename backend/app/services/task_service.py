@@ -221,12 +221,17 @@ class TaskService:
         batch_items = self._extract_batch_items(payload)
 
         if uploads:
-            request_snapshot["uploads"] = self._save_uploads(paths.upload_dir, uploads)
-            bg_model_fullpath = os.path.join(
-                str(self.config.get("DOCKER_WORKDIR", "/workspace")),
-                request_snapshot["uploads"][0]["relative_path"],
-            )
-            batch_items[0]["BG_MODEL_FULL_PATH"] = bg_model_fullpath
+            upload_infos = self._save_uploads(paths.upload_dir, uploads)
+            relative_path = self._get_model_relative_path(upload_infos)
+            if relative_path:
+                bg_model_fullpath = os.path.join(
+                    str(self.config.get("DOCKER_WORKDIR", "/workspace")),
+                    relative_path,
+                )
+                batch_items[0]["BG_MODEL_FULL_PATH"] = bg_model_fullpath
+
+            request_snapshot["uploads"] = upload_infos
+            
 
         self._write_json(paths.batch_config_path, batch_items)
         self._write_json(paths.request_path, request_snapshot)
@@ -444,17 +449,40 @@ class TaskService:
             filename = secure_filename(upload.filename or "")
             if not filename:
                 continue
-            target = upload_dir / filename
+
+            # 1. 识别文件类型并动态决定存储子目录
+            # suffix 包含点号，例如 '.xosc'
+            is_xosc = filename.lower().endswith(".xosc")
+
+            scenario_upload_dir = upload_dir / "scenario"
+
+            if is_xosc:
+                current_upload_dir = scenario_upload_dir
+                file_type = "scenario"
+            else:
+                current_upload_dir = upload_dir
+                file_type = "model"
+
+            # 2. 确保目标目录存在（特别是新建的 scenario 子目录）
+            current_upload_dir.mkdir(parents=True, exist_ok=True)
+
+            # 3. 处理重名冲突
+            target = current_upload_dir / filename
             if target.exists():
                 stem = target.stem
                 suffix = target.suffix
-                target = upload_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+                target = current_upload_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+
+            # 4. 执行保存
             upload.save(target)
+
+            # 5. 组装返回的 JSON 信息，添加 file_type 标识符
             saved.append(
                 {
                     "field_name": getattr(upload, "name", ""),
                     "original_filename": upload.filename,
                     "stored_filename": target.name,
+                    "file_type": file_type,  # 文件标识符: 'scenario' 或 'model'
                     "relative_path": str(
                         target.relative_to(self.config["TASK_DATA_ROOT"])
                     ),
@@ -520,3 +548,13 @@ class TaskService:
             return int(text)
         except ValueError:
             return text
+
+    @staticmethod
+    def _get_model_relative_path(upload_infos):
+        for info in upload_infos:
+            file_type = info["file_type"]
+            if file_type != "model":
+                continue
+            return info["relative_path"]
+
+        return ""

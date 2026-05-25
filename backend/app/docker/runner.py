@@ -139,7 +139,8 @@ class DockerRunner(BaseRunner):
         network_mode: str,
         cert_dir: str,
         scenario_dir: str,
-        model_path,
+        model_path: str,
+        bv_scenario_dir: str,
         workdir: str = "/workspace",
     ):
         self.image = image
@@ -148,6 +149,7 @@ class DockerRunner(BaseRunner):
         self.cert_dir = cert_dir
         self.scenario_dir = scenario_dir
         self.model_path = model_path
+        self.bv_scenario_dir = bv_scenario_dir
 
     def run(
         self,
@@ -165,36 +167,32 @@ class DockerRunner(BaseRunner):
 
             client = docker.from_env()
             rel_config = batch_config_path.relative_to(workspace_root)
-            # command = ["python", "main.py", "--batch-config", str(rel_config)]
-            command = ["python", "main.py", "--batch-config", "batch_config.json"]
+            # command = ["python", "main.py", "--batch-config", "batch_config.json"]
 
-            volumes = {
-                # str(workspace_root): {"bind": self.workdir, "mode": "rw"},
-                "/usr/share/fonts": {"bind": "/usr/share/fonts", "mode": "rw"},
-                "/etc/fonts": {"bind": "/etc/fonts", "mode": "rw"},
-                "/tmp/.X11-unix": {"bind": "/tmp/.X11-unix", "mode": "rw"},
-                output_dir: {"bind": "/tmp/output", "mode": "rw"},
-                self.cert_dir: {
-                    "bind": f"{os.path.join(self.workdir, 'Cert')}",
-                    "mode": "rw",
-                },
-                self.scenario_dir: {
-                    "bind": f"{os.path.join(self.workdir, 'Data', 'prod')}",
-                    "mode": "ro",
-                },
-                batch_config_path: {
-                    "bind": os.path.join(self.workdir, batch_config_path.name),
-                    "mode": "rw",
-                },
-            }
+            container_cert_dir = os.path.join(self.workdir, "Cert")
+            container_bv_scenarion_dir = os.path.join(
+                self.workdir, "Data", "bv_scenario"
+            )
+            container_scenarion_dir = os.path.join(self.workdir, "Data", "prod")
 
-            if self.model_path:
-                full_path = os.path.join(TASK_DATA_ROOT, self.model_path)
-                volumes[full_path] = {
-                    "bind": os.path.join(self.workdir, self.model_path),
-                    "mode": "ro",
-                }
-            
+            command = [
+                "bash",
+                "-c",
+                "python main.py --batch-config batch_config.json && "
+                "python evaluation/main.py /tmp/output/traj "
+                f"--bv-scene-root {container_bv_scenarion_dir} "
+                f"--gt-scene-root {container_scenarion_dir} "
+                "--output-root /tmp/output/evaluation "
+                "--num-workers-bv 4 --num-workers-av 1"
+            ]
+
+            volumes = self._volumes(
+                output_dir=output_dir,
+                batch_config_path=batch_config_path,
+                cert_dir=container_cert_dir,
+                scenarion_dir=container_scenarion_dir,
+                bv_scenarion_dir=container_bv_scenarion_dir
+            )
 
             container_kwargs: dict[str, Any] = {
                 "image": self.image,
@@ -330,18 +328,62 @@ class DockerRunner(BaseRunner):
             except Exception:
                 pass
 
+    def _volumes(
+        self,
+        batch_config_path: Path,
+        output_dir: Path,
+        cert_dir: str,
+        scenarion_dir: str,
+        bv_scenarion_dir:str
+    ):
+        volumes = {
+            "/usr/share/fonts": {"bind": "/usr/share/fonts", "mode": "rw"},
+            "/etc/fonts": {"bind": "/etc/fonts", "mode": "rw"},
+            "/tmp/.X11-unix": {"bind": "/tmp/.X11-unix", "mode": "rw"},
+            output_dir: {"bind": "/tmp/output", "mode": "rw"},
+            self.cert_dir: {
+                "bind": cert_dir,
+                "mode": "rw",
+            },
+            self.scenario_dir: {
+                "bind": scenarion_dir,
+                "mode": "ro",
+            },
+            batch_config_path: {
+                "bind": os.path.join(self.workdir, batch_config_path.name),
+                "mode": "rw",
+            },
+        }
+
+        if self.model_path:
+            full_path = os.path.join(TASK_DATA_ROOT, self.model_path)
+            volumes[full_path] = {
+                "bind": os.path.join(self.workdir, self.model_path),
+                "mode": "ro",
+            }
+
+        if self.bv_scenario_dir:
+            full_path = os.path.join(TASK_DATA_ROOT, self.bv_scenario_dir)
+            volumes[full_path] = {
+                "bind": bv_scenarion_dir,
+                "mode": "ro",
+            }
+
+        return volumes
+
 
 def build_runner(config: Any, upload_info: Any = None) -> BaseRunner:
     use_docker = bool(config.get("USE_DOCKER", False))
     image = str(config.get("DOCKER_IMAGE", "")).strip()
 
-    model_path = ""
-    if upload_info:
-        relativa_path = upload_info[0].get("relative_path", "")
-        model_path = relativa_path
+    model_path, bv_scenario_dir = _get_model_and_bv_scenario_path(
+        upload_info=upload_info
+    )
+    logger.error(f"model: {model_path}")
+    logger.error(f"bv_scenario_dir: {bv_scenario_dir}")
 
     if use_docker and image:
-        try:
+        try:    
             import docker  # noqa: F401
 
             return DockerRunner(
@@ -351,8 +393,33 @@ def build_runner(config: Any, upload_info: Any = None) -> BaseRunner:
                 cert_dir=str(config.get("TESSNG_CERT_DIR", "")),
                 scenario_dir=str(config.get("DOCKER_SCENARIO_DIR", "")),
                 model_path=model_path,
+                bv_scenario_dir=bv_scenario_dir,
             )
         except Exception:
             pass
 
     return LocalRunner()
+
+
+def _get_model_and_bv_scenario_path(upload_info):
+    model_path = ""
+    bv_scenario_dir = ""
+
+    if not upload_info:
+        return model_path, bv_scenario_dir
+
+    for info in upload_info:
+        file_type = info["file_type"]
+        relative_path = info.get("relative_path", "")
+
+        if not relative_path:
+            continue
+
+        if file_type == "model":
+            model_path = info.get("relative_path", "")
+        elif file_type == "scenario":
+            bv_scenario_dir = os.path.dirname(relative_path)
+
+        if model_path and bv_scenario_dir:
+            break
+    return model_path, bv_scenario_dir
