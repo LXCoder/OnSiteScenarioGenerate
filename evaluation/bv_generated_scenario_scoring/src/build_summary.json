@@ -1,0 +1,23 @@
+{
+  "A": {
+    "gt_scene_count": 3192,
+    "results_scene_count": 4427,
+    "kept_intersection_count": 3192,
+    "dropped_results_not_in_gt_count": 1235,
+    "missing_in_results_count": 0
+  },
+  "B": {
+    "gt_scene_count": 340,
+    "results_scene_count": 609,
+    "kept_intersection_count": 340,
+    "dropped_results_not_in_gt_count": 269,
+    "missing_in_results_count": 0
+  },
+  "C": {
+    "gt_scene_count": 330,
+    "results_scene_count": 602,
+    "kept_intersection_count": 330,
+    "dropped_results_not_in_gt_count": 272,
+    "missing_in_results_count": 0
+  }
+}

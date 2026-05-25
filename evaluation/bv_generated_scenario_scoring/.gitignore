@@ -1,0 +1,12 @@
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
+# Local outputs and logs
+outputs/
+log/
+*.log
+
+# IDE
+.idea/
+.vscode/

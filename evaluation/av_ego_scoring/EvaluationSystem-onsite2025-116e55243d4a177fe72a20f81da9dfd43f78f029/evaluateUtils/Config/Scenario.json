@@ -1,0 +1,22 @@
+{
+  "Scenario": {"3":  {"startSection":  [[-436, 65], [-430, 72]], "endSection":  [[-398, 48], [-391, 50]]}, "4":  {"startSection":  [[-382, 65], [-371, 67]], "endSection":  [[-329, 113], [-318, 116]]},
+               "5":  {"startSection":  [[-318, 124], [-308, 127]], "endSection":  [[-274, 160], [-270, 162]]}, "6":  {"startSection":  [[-265, 170], [-253, 174]], "endSection":  [[-304, 244], [-287, 254]]}},
+
+  "desireTimeConsume": {"3":  11.7, "4": 18.2, "5": 12.4, "6": 27.6},
+
+  "testDesireConsume": {"totalLength": 145, "desireSpeed": 15},
+
+  "Scenario3Section": [[-436, 65], [-430, 78]],
+  "Scenario4Section": [[-382, 65], [-371, 67]],
+  "Scenario5Section": [[-318, 124], [-308, 127]],
+  "Scenario6Section": [[-265, 170], [-253, 174]],
+
+  "Scenario3EndSection": [[-398, 48], [-391, 50]],
+  "Scenario4EndSection": [[-329, 113], [-318, 116]],
+  "Scenario5EndSection": [[-274, 160], [-270, 162]],
+  "Scenario6EndSection": [[-304, 244], [-287, 254]],
+
+  "RouteConn1": 345,
+  "RouteConn3": 380,
+  "RouteConn6": 348
+}

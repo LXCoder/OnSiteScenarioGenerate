@@ -1,0 +1,22 @@
+Highway:
+  acc_max: 5
+  acc_min: -7
+  cruise_speed: 80 / 3.6
+  delta_path_s_dense: 0.5
+  delta_path_s_sparse: 1
+  delta_speed_t_dense: 0.1
+  delta_speed_t_sparse: 0.5
+  path_s_dense_end: 20
+  path_s_sparse_end: 100
+  speed_s_end: 200
+  speed_w_overtake: 10
+Local:
+  min_overtake: 10
+  speed_s_end: 20
+  speed_w_acc: 100
+  speed_w_cruise: 0.3
+  speed_w_end_s: 10
+  speed_w_follow: 40
+  speed_w_jerk: 30
+  speed_w_overtake: 80
+code_1: 12020

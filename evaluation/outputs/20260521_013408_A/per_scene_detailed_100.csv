@@ -1,0 +1,6 @@
+topic,scene,bv_safety_20,bv_comfort_10,bv_test_30,bv_total_60,av_safety_10,av_efficiency_10,av_comfort_10,av_compliance_10,av_total_40,total_100,av_status,av_error
+A,scenario_0a5c9dbc,0.0,0.0,0.0,0.0,5.0,0.0,5.0,5.0,15.0,15.0,ok,
+A,scenario_1e61b028,20.0,8.35,0.0,28.35,0.0,0.0,0.0,0.0,0.0,28.35,,
+A,scenario_1edadbdd,20.0,9.52,1.5,31.02,0.0,0.0,0.0,0.0,0.0,31.02,,
+A,scenario_1eee3255,20.0,9.8,0.0,29.8,0.0,0.0,0.0,0.0,0.0,29.8,,
+A,AVERAGE,15.0,6.917,0.375,22.293,1.25,0.0,1.25,1.25,3.75,26.043,AVERAGE,

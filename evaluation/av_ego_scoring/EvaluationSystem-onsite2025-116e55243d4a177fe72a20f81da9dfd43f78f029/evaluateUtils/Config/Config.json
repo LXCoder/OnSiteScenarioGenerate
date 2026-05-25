@@ -1,0 +1,14 @@
+{
+  "send_TESS_Address": "192.168.1.54",
+  "send_TESS_Port": 9898,
+  "recv_VTD_Address": "192.168.1.57",
+  "recv_VTD_Port": 8768,
+  "SCP_Address": "192.168.1.54",
+  "SCP_Port": 9899,
+  "kafkaHostPull": "106.120.201.126",
+  "kafkaPortPull": 19359,
+  "topicAll": "TJ002AllMatchResultMiniData",
+  "topicSimplify": "TJSimplifyMatchResultMiniData",
+  "auto": "TJAutoMatchResultMiniData",
+  "scene": "TJTestSceneData"
+}
