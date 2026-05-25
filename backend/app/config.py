@@ -22,6 +22,9 @@ class Config:
     BACKEND_ROOT = BACKEND_ROOT
     PROJECT_ROOT = PROJECT_ROOT
     TASK_DATA_ROOT = TASK_DATA_ROOT
+    LOG_DIR = Path(os.getenv("BACKEND_LOG_DIR", str(BACKEND_ROOT / "logs"))).resolve()
+    LOG_LEVEL = os.getenv("BACKEND_LOG_LEVEL", "INFO").strip().upper() or "INFO"
+    LOG_BACKUP_COUNT = int(os.getenv("BACKEND_LOG_BACKUP_COUNT", "14"))
     DEFAULT_TIMEOUT_SECONDS = int(os.getenv("BACKEND_TASK_TIMEOUT", "3600"))
     ENABLE_WORKER = _as_bool(os.getenv("BACKEND_ENABLE_WORKER"), True)
     
