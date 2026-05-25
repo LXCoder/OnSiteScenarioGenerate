@@ -132,6 +132,28 @@ def download_task(task_id: str):
     )
 
 
+@bp.get("/<task_id>/evaluation")
+@require_access()
+def get_evaluation(task_id: str):
+    access = g.access_context
+
+    task = _service().get_task(task_id, access=access)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+
+    try:
+        result = _service().get_evaluation_result(task_id, access=access)
+    except FileNotFoundError as exc:
+        logger.warning("evaluation result not found for task %s: %s", task_id, exc)
+        return jsonify({"error": str(exc)}), 404
+    except Exception:
+        logger.exception("failed to get evaluation result for task %s", task_id)
+        return jsonify({"error": "Failed to read evaluation result"}), 500
+
+    logger.info("task evaluation fetched: %s", task_id)
+    return jsonify(result)
+
+
 @bp.post("/<task_id>/cancel")
 @require_access()
 def cancel_task(task_id: str):

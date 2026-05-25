@@ -226,6 +226,38 @@ Token: <jwt-token>
 - `output/`
 - `upload/`
 
+### `GET /tasks/<task_id>/evaluation`
+
+读取任务输出目录下最新一次仿真的评价结果。
+
+后端会优先读取：
+
+- `output/evaluation/<latest_dir>/summary_averages_100.csv`
+- `output/evaluation/<latest_dir>/per_scene_detailed_100.csv`
+
+成功响应：`200 OK`
+
+```json
+{
+  "task_id": "task_20260522012219_9fef2a",
+  "summary": {
+    "topic": "A",
+    "scene_count": 6,
+    "bv_safety_20_avg": 6.667,
+    "total_100_avg": 20.442
+  },
+  "per_scene": [
+    {
+      "topic": "A",
+      "scene": "scenario_1eee3255",
+      "total_100": 44.6,
+      "av_status": "ok",
+      "av_error": null
+    }
+  ]
+}
+```
+
 ### `POST /tasks/<task_id>/cancel`
 
 取消任务。

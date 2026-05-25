@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import shutil
@@ -370,6 +371,44 @@ class TaskService:
             if temp_path.exists():
                 temp_path.unlink(missing_ok=True)
 
+    def get_evaluation_result(
+        self,
+        task_id: str,
+        *,
+        access: AccessContext,
+    ) -> dict[str, Any] | None:
+        task = self.repository.get_task(task_id)
+        if not task or not self._can_access_task(task, access):
+            return None
+
+        output_dir = Path(task["output_dir"])
+        evaluation_root = output_dir / "evaluation"
+        if not evaluation_root.exists():
+            raise FileNotFoundError("evaluation directory not found")
+
+        evaluation_dirs = [path for path in evaluation_root.iterdir() if path.is_dir()]
+        if not evaluation_dirs:
+            raise FileNotFoundError("evaluation result directory not found")
+
+        latest_dir = max(evaluation_dirs, key=lambda path: path.stat().st_mtime)
+        summary_path = latest_dir / "summary_averages_100.csv"
+        per_scene_path = latest_dir / "per_scene_detailed_100.csv"
+
+        if not summary_path.exists():
+            raise FileNotFoundError("summary_averages_100.csv not found")
+
+        summary_rows = self._read_csv_rows(summary_path)
+        if not summary_rows:
+            raise ValueError("summary_averages_100.csv is empty")
+
+        per_scene_rows = self._read_csv_rows(per_scene_path) if per_scene_path.exists() else []
+
+        return {
+            "task_id": task_id,
+            "summary": summary_rows[0], # 场景总结结果
+            # "per_scene": per_scene_rows,# 场景详情，先注释，后续需要再打开
+        }
+
     def _extract_batch_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         source = payload.get("batch_items")
         if source is None:
@@ -458,3 +497,26 @@ class TaskService:
             return None
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    @staticmethod
+    def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            return [
+                {key: TaskService._coerce_csv_value(value) for key, value in row.items()}
+                for row in reader
+            ]
+
+    @staticmethod
+    def _coerce_csv_value(value: str | None) -> Any:
+        if value is None:
+            return None
+        text = value.strip()
+        if text == "":
+            return None
+        try:
+            if any(ch in text for ch in (".", "e", "E")):
+                return float(text)
+            return int(text)
+        except ValueError:
+            return text
