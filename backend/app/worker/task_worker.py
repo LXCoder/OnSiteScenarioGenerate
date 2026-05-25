@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from queue import Empty
 from ..docker.runner import build_runner
 from ..extensions import task_queue
 from ..services.task_service import AccessContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -35,12 +38,15 @@ class TaskWorker:
         with self.app.app_context():
             for task in self.task_service.repository.list_pending_tasks():
                 task_queue.put(task["task_id"])
+            logger.info("reloaded pending tasks into worker queue")
 
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        logger.info("task worker thread started")
 
     def enqueue(self, task_id: str) -> None:
         task_queue.put(task_id)
+        logger.info("task enqueued: %s", task_id)
 
     def cancel(self, task_id: str, *, access: AccessContext) -> bool:
         task = self.task_service.get_task(task_id, access=access)
@@ -50,9 +56,11 @@ class TaskWorker:
         with self._lock:
             if self._active_task and self._active_task.task_id == task_id:
                 self._active_task.cancel_event.set()
+                logger.info("cancel requested for running task: %s", task_id)
                 return True
 
         self.task_service.cancel_task(task_id, access=access)
+        logger.info("task cancelled before start: %s", task_id)
         return True
 
     def _loop(self) -> None:
@@ -65,12 +73,15 @@ class TaskWorker:
 
                 task = self.task_service.get_task(task_id)
                 if not task:
+                    logger.warning("task not found when worker consumed queue item: %s", task_id)
                     continue
 
                 if task["status"] == "CANCELLED":
+                    logger.info("skip cancelled task: %s", task_id)
                     continue
 
                 self.task_service.mark_running(task_id)
+                logger.info("task started: %s", task_id)
 
                 cancel_event = threading.Event()
                 with self._lock:
@@ -94,7 +105,14 @@ class TaskWorker:
                         result.exit_code,
                         result.message,
                     )
+                    logger.info(
+                        "task finished: %s status=%s exit_code=%s",
+                        task_id,
+                        result.status,
+                        result.exit_code,
+                    )
                 except Exception as exc:
+                    logger.exception("worker execution failed for task: %s", task_id)
                     self.task_service.mark_finished(
                         task_id,
                         "FAILED",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from ..config import TASK_DATA_ROOT
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -47,6 +50,7 @@ class LocalRunner(BaseRunner):
     ) -> RunResult:
         rel_config = batch_config_path.relative_to(workspace_root)
         command = [sys.executable, "main.py", "--batch-config", str(rel_config)]
+        logger.info("starting local runner command: %s", " ".join(command))
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
 
@@ -97,12 +101,14 @@ class LocalRunner(BaseRunner):
                         process.kill()
                     status = "CANCELLED"
                     message = "Task cancelled"
+                    logger.warning("local runner cancelled")
                     break
 
                 return_code = process.poll()
                 if return_code is not None:
                     status = "SUCCESS" if return_code == 0 else "FAILED"
                     message = f"Process exited with code {return_code}"
+                    logger.info("local runner exited with code %s", return_code)
                     break
 
                 if timeout_seconds is not None and timeout_seconds > 0:
@@ -111,6 +117,10 @@ class LocalRunner(BaseRunner):
                         process.kill()
                         status = "TIMEOUT"
                         message = f"Task timed out after {timeout_seconds} seconds"
+                        logger.warning(
+                            "local runner timed out after %s seconds",
+                            timeout_seconds,
+                        )
                         break
 
                 time.sleep(0.5)
@@ -205,6 +215,7 @@ class DockerRunner(BaseRunner):
             }
 
             container = client.containers.run(**container_kwargs)
+            logger.info("docker runner started container: %s", container.id)
 
             stdout_path.parent.mkdir(parents=True, exist_ok=True)
             stderr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -255,11 +266,20 @@ class DockerRunner(BaseRunner):
                 if status in {"exited", "dead"}:
                     exit_code = state.get("ExitCode")
                     if exit_code == 0:
+                        logger.info(
+                            "docker runner container exited successfully: %s",
+                            container.id,
+                        )
                         return RunResult(
                             status="SUCCESS",
                             exit_code=0,
                             message="Container exited successfully",
                         )
+                    logger.warning(
+                        "docker runner container exited with code %s: %s",
+                        exit_code,
+                        container.id,
+                    )
                     return RunResult(
                         status="FAILED",
                         exit_code=exit_code,
@@ -268,6 +288,10 @@ class DockerRunner(BaseRunner):
 
                 if cancel_event.is_set():
                     container.kill()
+                    logger.warning(
+                        "docker runner container cancelled and killed: %s",
+                        container.id,
+                    )
                     return RunResult(
                         status="CANCELLED",
                         exit_code=None,
@@ -278,6 +302,11 @@ class DockerRunner(BaseRunner):
                     elapsed = time.monotonic() - start
                     if elapsed > timeout_seconds:
                         container.kill()
+                        logger.warning(
+                            "docker runner container timed out after %s seconds: %s",
+                            timeout_seconds,
+                            container.id,
+                        )
                         return RunResult(
                             status="TIMEOUT",
                             exit_code=None,
@@ -286,6 +315,7 @@ class DockerRunner(BaseRunner):
 
                 time.sleep(1.0)
         except Exception as exc:
+            logger.exception("docker runner failed")
             return RunResult(
                 status="FAILED", exit_code=None, message=f"Docker error: {exc}"
             )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-import traceback
 
 from flask import Blueprint, Response, current_app, g, jsonify, request, send_file
 
@@ -9,6 +9,7 @@ from ..utils.verification import require_access
 
 
 bp = Blueprint("tasks", __name__)
+logger = logging.getLogger(__name__)
 
 
 # 赛题类型映射字典
@@ -58,10 +59,11 @@ def create_task():
     try:
         task = _service().create_task(payload, uploads, access=access)
     except Exception as exc:
-        traceback.print_exc()
+        logger.exception("failed to create task")
         return jsonify({"error": "An internal error has occurred."}), 400
 
     _worker().enqueue(task["task_id"])
+    logger.info("task created: %s by user=%s", task["task_id"], access.user_id)
     return jsonify(task), 201
 
 
@@ -70,6 +72,7 @@ def create_task():
 def list_tasks():
     access = g.access_context
     tasks = _service().list_tasks(access=access)
+    logger.info("list tasks for user=%s count=%s", access.user_id, len(tasks))
     return jsonify({"items": tasks, "count": len(tasks)})
 
 
@@ -104,6 +107,7 @@ def get_logs(task_id: str):
         stderr_text = _read_tail(log_dir / "stderr.log", tail)
         content = f"[stdout]\n{stdout_text}\n[stderr]\n{stderr_text}"
 
+    logger.info("task logs fetched: %s stream=%s tail=%s", task_id, stream, tail)
     return Response(content, mimetype="text/plain; charset=utf-8")
 
 
@@ -119,6 +123,7 @@ def download_task(task_id: str):
     if not archive_path or not archive_path.exists():
         return jsonify({"error": "Archive not available"}), 404
 
+    logger.info("task archive downloaded: %s", task_id)
     return send_file(
         archive_path,
         as_attachment=True,
@@ -139,6 +144,7 @@ def cancel_task(task_id: str):
     if not ok:
         return jsonify({"error": "Unable to cancel task"}), 400
 
+    logger.info("task cancel requested: %s by user=%s", task_id, access.user_id)
     return jsonify(_service().get_task(task_id, access=access))
 
 
