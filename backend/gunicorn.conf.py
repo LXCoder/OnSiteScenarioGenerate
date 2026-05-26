@@ -12,6 +12,8 @@ timeout = 120
 graceful_timeout = 30
 keepalive = 5
 
+pidfile = "gunicorn.pid"
+
 # log
 log_level = os.getenv("BACKEND_LOG_LEVEL", "INFO").strip().lower() or "info"
 backup_count = int(os.getenv("BACKEND_LOG_BACKUP_COUNT", "14"))
@@ -29,3 +31,4 @@ logconfig_dict = build_logging_config(
     backup_count=backup_count,
     include_gunicorn=True,
 )
+
