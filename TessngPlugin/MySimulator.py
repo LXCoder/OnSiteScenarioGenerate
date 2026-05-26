@@ -2191,6 +2191,8 @@ class MySimulator(QObject, PyCustomerSimulator):
 
         start_point = QPointF(start_x, -start_y)
         end_point = QPointF(end_x, -end_y)
+        print(f"start point: {start_point}")
+        print(f"end point: {end_point}")
 
         start_waypoint = self.createTessngWaypoint(start_point, 0, speed)
         end_waypoint = self.createTessngWaypoint(end_point, 1, 2.0)
@@ -2227,7 +2229,7 @@ class MySimulator(QObject, PyCustomerSimulator):
         print(f"[TESSNG Ego] 路由包含 {len(lanes)} 条车道\n{lanes}")
 
         ego_waypoints = self._getRobustWaypoints(
-            lane_points, (start_x, -start_y), (end_x, -end_y), 8.0
+            lane_points, (start_x, -start_y), (end_x, -end_y), 3.0
         )
         print(f"[TESSNG Ego] 平滑后的路由包含 {len(ego_waypoints)} 个点")
 
@@ -2237,74 +2239,128 @@ class MySimulator(QObject, PyCustomerSimulator):
         return ego_waypoints
 
     def _getRobustWaypoints(self, lane_points, start, end, step_size=0.5):
-        # 1. 整理控制点
-        all_pts = []
-        for lane_pts in lane_points:
-            all_pts.extend(lane_pts)
+        """
+        分路段（Segment）分别进行平滑插值采样，最后进行无缝拼接
+        """
+        all_resampled_segments = []
 
-        # 过滤与去重
-        path = (
-            [np.array(start)]
-            + [np.array(p) for p in all_pts if start[0] < p[0] < end[0]]
-            + [np.array(end)]
-        )
-        # 去除相邻重复点（这是防止插值报错的关键）
-        unique_path = [path[0]]
-        for i in range(1, len(path)):
-            if np.linalg.norm(path[i] - unique_path[-1]) > 0.01:
-                unique_path.append(path[i])
-        path_arr = np.array(unique_path)
+        # 遍历处理每一段独立的路段
+        for seg_idx, lane_pts in enumerate(lane_points):
+            if len(lane_pts) == 0:
+                continue
 
-        # 2. 判断是否为直线
-        # 如果点数少于3个，或者三点共线，直接使用线性插值
-        is_line = False
-        if len(path_arr) < 3:
-            is_line = True
-        else:
-            # 计算斜率的变化情况，如果斜率变化极小，判定为直线
-            diffs = np.diff(path_arr, axis=0)
-            angles = np.arctan2(diffs[:, 1], diffs[:, 0])
-            if np.std(angles) < 0.01:  # 角度标准差很小，认为是直线
+            # 1. 确定当前路段的局部起点和终点
+            # 如果是第一段，起点用外部传入的 start；否则用该段自己的第一个点
+            seg_start = np.array(start) if seg_idx == 0 else np.array(lane_pts[0])
+            # 如果是最后一段，终点用外部传入的 end；否则用该段自己的最后一个点
+            seg_end = (
+                np.array(end)
+                if seg_idx == len(lane_points) - 1
+                else np.array(lane_pts[-1])
+            )
+
+            # 2. 整理当前路段的内部控制点
+            # 注意：为了避免全局 X 轴过滤的漏洞，仅过滤掉局部边界以外的点，且考虑 X 递增或递减的鲁棒性
+            x_min, x_max = min(seg_start[0], seg_end[0]), max(seg_start[0], seg_end[0])
+
+            path = [seg_start]
+            for p in lane_pts:
+                # 兼容带有负号的 Y 坐标，如果输入是负的，在这里自动转换为正数（按需开启）
+                # p_norm = np.array([p[0], -p[1] if p[1] < 0 else p[1]])
+                p_norm = np.array(p)
+
+                if x_min <= p_norm[0] <= x_max:
+                    path.append(p_norm)
+            path.append(seg_end)
+
+            # 局部段内按 X 轴走向进行排序，防止乱序导致插值报错
+            if seg_start[0] <= seg_end[0]:
+                path = sorted(path, key=lambda p: p[0])
+            else:
+                path = sorted(path, key=lambda p: p[0], reverse=True)
+
+            # 局部去重
+            unique_path = [path[0]]
+            for i in range(1, len(path)):
+                if np.linalg.norm(path[i] - unique_path[-1]) > 0.01:
+                    unique_path.append(path[i])
+            path_arr = np.array(unique_path)
+
+            # 3. 局部段的直线/曲线判定
+            is_line = False
+            if len(path_arr) < 3:
                 is_line = True
+            else:
+                diffs = np.diff(path_arr, axis=0)
+                angles = np.arctan2(diffs[:, 1], diffs[:, 0])
+                angle_diffs = np.abs(
+                    np.arctan2(np.sin(angles - angles[0]), np.cos(angles - angles[0]))
+                )
+                # 如果这一段内部的最大转向角小于 0.02 rad (~1.15°)，则这一段判定为直线
+                if np.max(angle_diffs) < 0.02:
+                    is_line = True
 
-        # 3. 采样逻辑
-        if is_line:
-            # 直线方案
-            segments = np.diff(path_arr, axis=0)
-            dist_each = np.linalg.norm(segments, axis=1)
-            total_dist = np.sum(dist_each)
-            num_samples = int(total_dist / step_size)
+            print(f"Segment {seg_idx}: points_count={len(path_arr)}, is_line={is_line}")
 
-            resampled_points = []
-            for i in range(num_samples):
-                d = i * step_size
-                cum_dist = np.insert(np.cumsum(dist_each), 0, 0)
-                idx = np.searchsorted(cum_dist, d) - 1
-                idx = np.clip(idx, 0, len(path_arr) - 2)
-                t = (d - cum_dist[idx]) / dist_each[idx]
-                pt = path_arr[idx] + t * (path_arr[idx + 1] - path_arr[idx])
-                resampled_points.append(pt)
+            # 4. 局部采样逻辑
+            if is_line:
+                # ------- 直线方案 -------
+                segments = np.diff(path_arr, axis=0)
+                dist_each = np.linalg.norm(segments, axis=1)
+                total_dist = np.sum(dist_each)
 
-            # 强制添加终点
-            resampled_points.append(path_arr[-1])
-            return np.array(resampled_points)
+                # 如果微短线段总长还不够一个步长，直接放入首尾点
+                if total_dist < step_size:
+                    resampled_points = [path_arr[0], path_arr[-1]]
+                else:
+                    num_samples = int(total_dist / step_size)
+                    resampled_points = []
+                    for i in range(num_samples):
+                        d = i * step_size
+                        cum_dist = np.insert(np.cumsum(dist_each), 0, 0)
+                        idx = np.searchsorted(cum_dist, d) - 1
+                        idx = np.clip(idx, 0, len(path_arr) - 2)
+                        t = (d - cum_dist[idx]) / dist_each[idx]
+                        pt = path_arr[idx] + t * (path_arr[idx + 1] - path_arr[idx])
+                        resampled_points.append(pt)
+                    resampled_points.append(path_arr[-1])
 
-        else:
-            # 曲线方案
-            tck, u = splprep([path_arr[:, 0], path_arr[:, 1]], s=0, k=3)
-            u_dense = np.linspace(0, 1, 1000)
-            x_dense, y_dense = splev(u_dense, tck)
+                seg_resampled = np.array(resampled_points)
+            else:
+                # ------- 曲线方案 -------
+                # 动态调整 B-Spline 阶数 k，防止当前段点数太少报错
+                k_order = min(3, len(path_arr) - 1)
 
-            dist = np.sqrt(np.diff(x_dense) ** 2 + np.diff(y_dense) ** 2)
-            arc_length = np.concatenate(([0], np.cumsum(dist)))
+                tck, u = splprep([path_arr[:, 0], path_arr[:, 1]], s=0, k=k_order)
+                u_dense = np.linspace(0, 1, 1000)
+                x_dense, y_dense = splev(u_dense, tck)
 
-            # 使用 arange 保证步长，最后显式加上 total_length
-            target_dists = np.arange(0, arc_length[-1], step_size)
-            target_dists = np.append(target_dists, arc_length[-1])  # 强制加入终点
+                dist = np.sqrt(np.diff(x_dense) ** 2 + np.diff(y_dense) ** 2)
+                arc_length = np.concatenate(([0], np.cumsum(dist)))
 
-            x_resampled = np.interp(target_dists, arc_length, x_dense)
-            y_resampled = np.interp(target_dists, arc_length, y_dense)
-            return np.column_stack((x_resampled, y_resampled))
+                target_dists = np.arange(0, arc_length[-1], step_size)
+                if len(target_dists) == 0 or target_dists[-1] < arc_length[-1]:
+                    target_dists = np.append(target_dists, arc_length[-1])
+
+                x_resampled = np.interp(target_dists, arc_length, x_dense)
+                y_resampled = np.interp(target_dists, arc_length, y_dense)
+                seg_resampled = np.column_stack((x_resampled, y_resampled))
+
+            all_resampled_segments.append(seg_resampled)
+
+        # ================= 5. 多段数据无缝拼接 =================
+        if not all_resampled_segments:
+            return np.array([])
+
+        final_waypoints = [all_resampled_segments[0][0]]
+
+        for seg in all_resampled_segments:
+            for pt in seg:
+                # 检查当前点与拼接轨迹的最后一个点是否重合，避免衔接处出现重复点
+                if np.linalg.norm(pt - final_waypoints[-1]) > 0.01:
+                    final_waypoints.append(pt)
+
+        return np.array(final_waypoints)
 
     def _generateEgoWaypoints(self):
         for scenario in self.scenarios:
@@ -2323,7 +2379,6 @@ class MySimulator(QObject, PyCustomerSimulator):
                 start_point = vehi["path"][0]
                 info["initial_state"]["x"] = start_point[0]
                 info["initial_state"]["y"] = -start_point[1]
-                # print(f"aaa: {start_point}")
 
                 ego_waypoints = self._createEgoRouting(info)
                 
