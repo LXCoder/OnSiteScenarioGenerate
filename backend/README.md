@@ -17,6 +17,7 @@ Environment variables:
 - `BACKEND_LOG_DIR` default `backend/logs`
 - `BACKEND_LOG_LEVEL` default `INFO`
 - `BACKEND_LOG_BACKUP_COUNT` default `14`
+- `BACKEND_TASK_DATA_ROOT` default `backend/task_data`
 - `BACKEND_USE_DOCKER` default `false`
 - `BACKEND_DOCKER_IMAGE` Docker image used by the worker when Docker mode is enabled
 - `BACKEND_TASK_TIMEOUT` default `3600`
@@ -131,10 +132,10 @@ Token: <jwt-token>
   "create_time": "2026-05-18T12:30:45.123456+00:00",
   "start_time": null,
   "finish_time": null,
-  "batch_config_path": ".../backend/task_data/task_.../batch_config.json",
-  "request_json": ".../backend/task_data/task_.../request.json",
-  "log_dir": ".../backend/task_data/task_.../logs",
-  "output_dir": ".../backend/task_data/task_.../output",
+  "batch_config_path": ".../<task_data_root>/task_.../batch_config.json",
+  "request_json": ".../<task_data_root>/task_.../request.json",
+  "log_dir": ".../<task_data_root>/task_.../logs",
+  "output_dir": ".../<task_data_root>/task_.../output",
   "message": "Task created",
   "exit_code": null,
   "cancel_requested": 0,
@@ -279,13 +280,32 @@ Token: <jwt-token>
 
 ## Task storage
 
-Runtime data is stored under `backend/task_data/`.
+Runtime data is stored under `BACKEND_TASK_DATA_ROOT`.
+
+默认值是 `backend/task_data/`，也可以配置成独立目录，例如：
+
+```bash
+export BACKEND_TASK_DATA_ROOT=/data/onsite/backend-task-data
+```
+
+或者在 `.env` 配置文件中配置环境变量
+`
+BACKEND_TASK_DATA_ROOT=/data/onsite/backend-task-data
+`
 
 ## Database
 
 后端已从 SQLite 切换到 MySQL。启动时会自动确保 `tasks` 表存在。
 
-用户认证依赖已有 `user` 表，定义见 [user.sql](/home/dt/workspace/OnSiteScenarioGenerate/backend/task_data/user.sql)。
+用户认证依赖已有 `user` 表。见生产环境数据库 `onsite_prod`。
+```yml
+BACKEND_MYSQL_HOST="sh-cynosdbmysql-grp-7cwak2fy.sql.tencentcdb.com"
+BACKEND_MYSQL_PORT="20908"
+BACKEND_MYSQL_USER="root"
+BACKEND_MYSQL_PASSWORD="SZdGuvr8vcEWR9pCvkaWNsr2"
+BACKEND_MYSQL_DATABASE="onsite_prod"
+BACKEND_MYSQL_CHARSET="utf8mb4"
+```
 
 当前 `tasks` 表核心字段包括：
 

@@ -166,7 +166,6 @@ class DockerRunner(BaseRunner):
             import docker
 
             client = docker.from_env()
-            rel_config = batch_config_path.relative_to(workspace_root)
             # command = ["python", "main.py", "--batch-config", "batch_config.json"]
 
             container_cert_dir = os.path.join(self.workdir, "Cert")

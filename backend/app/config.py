@@ -14,7 +14,9 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
 load_dotenv()
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_ROOT.parent
-TASK_DATA_ROOT = BACKEND_ROOT / "task_data"
+TASK_DATA_ROOT = Path(
+    os.getenv("BACKEND_TASK_DATA_ROOT", str(BACKEND_ROOT / "task_data"))
+).resolve()
 
 
 class Config:
