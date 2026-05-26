@@ -370,25 +370,78 @@ python main.py --batch-config your_batch_config.json
 
 ### 生产环境后端启动方式
 ```bash
-cd backend
+ssh onsite@116.62.206.154
+# password: ONSITEonsite7988383
+
+cd /home/onsite/workspace/backend
 # 激活虚拟环境，使用 uv 管理虚拟环境
 source ~/.virtualenvs/onsite/bin/activate
+
+# 启动后端，启动参数请看 gunicorn.conf.py
+gunicorn -c gunicorn.conf.py -D run:app # 守护线程运行，去掉 -D 则前台运行
+
+# 停止后端程序
+kill $(cat gunicorn.pid)
+
 # 如果需新增第三方库
 uv pip install 第三方库名称
-# 启动后端，启动参数请看 gunicorn.conf.py
-gunicorn -c gunicorn.conf.py run:app
+```
+
+如果以守护进程的方式运行，可以执行以下命令检查后端是否正常启动
+```bash
+curl --request GET --url http://127.0.0.1:5000/health
+# 返回 {"status":"ok"}
 ```
 
 ### 更新场景文件
-场景文件存放的目录为： `/root/_scenario_data`, 目录结构如下：
+后端存储文件存放的目录为： `/home/onsite/_onsite_data`, (**注：不要随便删除该目录下的任何东西**)，目录结构如下：
 ```bash
 .
-├── A
-├── B
-└── C
+├── Cert
+│   ├── 2026Onsite.key
+│   ├── _cert
+│   ├── _logger
+│   └── _logger.bak
+├── scenario
+│   ├── A
+│   └── B
+└── task_data
+    ├── task_20260526033035_a613a2
+    └── task_20260526033244_12dab4
 ```
-分别存放 A,B,C 类型的场景
-可以通过 `backend/.env` 文件中的环境变量 `BACKEND_SCENARIO_DIR` 设置场景文件所在的目录
+
+- Cert: TESSNG 的激活凭证
+- scenario: 场景文件存放目录，如果需要更新场景文件，直接替换掉 A,B,C 对应的目录
+- task_data: 仿真、评价的输入/输出、上传制品、容器 log 文件等, 该目录下的一个子文件对应一个 task, task 目录下的内容结构如下：
+
+```
+.
+├── archive
+├── batch_config.json
+├── logs
+│   ├── stderr.log
+│   └── stdout.log
+├── output
+│   ├── evaluation
+│   │   └── 20260526_033319_A
+│   │       ├── per_scene_detailed_100.csv
+│   │       └── summary_averages_100.csv
+│   └── traj
+│       ├── 0_scenario_4a0fbf94_gt_output_20260526_033248.csv
+│       ├── 0_scenario_4a0fbf94_gt_output_20260526_033255.csv
+│       ├── 0_scenario_4a0fbf94_gt_output_20260526_033302.csv
+│       ├── 0_scenario_4a0fbf94_gt_output_20260526_033308.csv
+│       └── 0_scenario_4a0fbf94_gt_output_20260526_033315.csv
+├── request.json
+└── upload
+    ├── model.zip.v5
+    └── scenario
+        ├── scenario_1e61b028_gt.xosc
+        └── scenario_1eee3255_gt.xosc
+
+8 directories, 14 files
+```
+
 
 ## 10. 构建容器
 ```
@@ -397,3 +450,40 @@ bash build_docker.sh # 使用当前日期作为 tag 号，如 20260521
 ```
 `Dockerfile`: 镜像构建文件
 `.dockerignore`： 容器构建执行 `COPY` 命令时，需要忽略掉的目录
+
+如果 `OnSiteScenarioGenerate` 中的内容有变更，则需要重新构建镜像。
+重新构建镜像后，需要再后端的 `.env` 文件更新镜像的 tag, 然后重启后端服务。
+
+## 11.VNC 远程服务器
+
+### vnc 服务端（服务器）
+
+```bash
+# 操作 vncserver 相关命令时不要在 root 用户下，会有风险，建议在 onsite 用户下操作
+# 1、查看 vnc 监听哪个端口
+ss -tulnp | grep vnc
+# 输出：
+tcp   LISTEN 0      5                 0.0.0.0:5901       0.0.0.0:*    users:(("Xtigervnc",pid=64425,fd=9))
+tcp   LISTEN 0      5                    [::]:5901          [::]:*    users:(("Xtigervnc",pid=64425,fd=10))
+# 如上面输出的监听的socket是 0.0.0.0:5901
+
+# 2、查看 vnc server 
+vncserver -list
+# 输出
+TigerVNC server sessions:
+
+X DISPLAY #     RFB PORT #      RFB UNIX PATH   PROCESS ID #    SERVER
+1               5901                            64425           Xtigervnc
+
+
+# 3、关闭 vnc server, :x, x 就是上面查看中的 X DISPLAY 列的数字，如 :1
+vncserver -kill :1
+
+# 4、启动 vnc server，启动前最好先执行关闭命令
+vncserver :1 -localhost no
+```
+
+### 客户端 RealVNC Viewer
+安装一个 vnc 客户端(如 RealVNC Viewer)，运行程序，新建连接，以下是连接信息和密码
+vnc server: `116.62.206.154:5901`
+  password: `ONSITEonsite7988383`
