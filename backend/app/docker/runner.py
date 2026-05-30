@@ -415,10 +415,14 @@ def _get_model_and_bv_scenario_path(upload_info):
             continue
 
         if file_type == "model":
-            model_path = info.get("relative_path", "")
+            relative_path = info.get("relative_path", "")
+            normalized = relative_path.replace("\\", "/")
+            if normalized.endswith("tessng_ppo/model.zip"):
+                model_path = relative_path
         elif file_type == "scenario":
             bv_scenario_dir = os.path.dirname(relative_path)
 
         if model_path and bv_scenario_dir:
             break
+
     return model_path, bv_scenario_dir

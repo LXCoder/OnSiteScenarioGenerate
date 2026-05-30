@@ -36,6 +36,13 @@ def create_task():
         req_data = {key: value for key, value in request.form.items()}
 
     uploads = [file_storage for _, file_storage in request.files.items(multi=True)]
+    if len(uploads) != 1:
+        return jsonify({"error": "Only one submission zip file is allowed"}), 400
+
+    archive = uploads[0]
+    archive_name = (archive.filename or "").strip().lower()
+    if not archive_name.endswith(".zip"):
+        return jsonify({"error": "Submission must be a .zip archive"}), 400
 
     qtype = int(req_data.get("qtype", -1))  # 0 -> A, 1 -> B, 2 ->C
     qname = req_data.get("name") or ""
@@ -57,7 +64,10 @@ def create_task():
     }
 
     try:
-        task = _service().create_task(payload, uploads, access=access)
+        task = _service().create_task(payload, [archive], access=access)
+    except ValueError as exc:
+        logger.warning("invalid submission archive: %s", exc)
+        return jsonify({"error": "An internal error has occurred."}), 400
     except Exception as exc:
         logger.exception("failed to create task")
         return jsonify({"error": "An internal error has occurred."}), 400

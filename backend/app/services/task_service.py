@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 import pymysql
@@ -212,45 +212,51 @@ class TaskService:
         task_id = self._generate_task_id()
         paths = self.build_task_paths(task_id)
 
-        request_snapshot = {
-            "payload": payload,
-            "uploads": [],
-            "user_id": access.user_id,
-        }
+        try:
+            request_snapshot = {
+                "payload": payload,
+                "uploads": [],
+                "user_id": access.user_id,
+            }
 
-        batch_items = self._extract_batch_items(payload)
+            batch_items = self._extract_batch_items(payload)
 
-        if uploads:
-            upload_infos = self._save_uploads(paths.upload_dir, uploads)
-            relative_path = self._get_model_relative_path(upload_infos)
-            if relative_path:
+            if uploads:
+                upload_infos = self._save_uploads(paths.upload_dir, uploads)
+                relative_path = self._get_model_relative_path(upload_infos)
+                if not relative_path:
+                    raise ValueError(
+                        "Submission archive must contain tessng_ppo/model.zip"
+                    )
                 bg_model_fullpath = os.path.join(
                     str(self.config.get("DOCKER_WORKDIR", "/workspace")),
                     relative_path,
                 )
                 batch_items[0]["BG_MODEL_FULL_PATH"] = bg_model_fullpath
 
-            request_snapshot["uploads"] = upload_infos
-            
+                request_snapshot["uploads"] = upload_infos
 
-        self._write_json(paths.batch_config_path, batch_items)
-        self._write_json(paths.request_path, request_snapshot)
+            self._write_json(paths.batch_config_path, batch_items)
+            self._write_json(paths.request_path, request_snapshot)
 
-        record = {
-            "task_id": task_id,
-            "user_id": access.user_id,
-            "name": payload.get("name") or task_id,
-            "status": "PENDING",
-            "create_time": _utc_now(),
-            "batch_config_path": str(paths.batch_config_path),
-            "request_json": str(paths.request_path),
-            "log_dir": str(paths.log_dir),
-            "output_dir": str(paths.output_dir),
-            "message": "Task created",
-            "cancel_requested": False,
-        }
-        task = self.repository.create_task(record)
-        return self._attach_runtime_fields(task)
+            record = {
+                "task_id": task_id,
+                "user_id": access.user_id,
+                "name": payload.get("name") or task_id,
+                "status": "PENDING",
+                "create_time": _utc_now(),
+                "batch_config_path": str(paths.batch_config_path),
+                "request_json": str(paths.request_path),
+                "log_dir": str(paths.log_dir),
+                "output_dir": str(paths.output_dir),
+                "message": "Task created",
+                "cancel_requested": False,
+            }
+            task = self.repository.create_task(record)
+            return self._attach_runtime_fields(task)
+        except Exception:
+            shutil.rmtree(paths.task_dir, ignore_errors=True)
+            raise
 
     def get_task(
         self, task_id: str, *, access: AccessContext | None = None
@@ -450,45 +456,135 @@ class TaskService:
             if not filename:
                 continue
 
-            # 1. 识别文件类型并动态决定存储子目录
-            # suffix 包含点号，例如 '.xosc'
-            is_xosc = filename.lower().endswith(".xosc")
+            if filename.lower().endswith(".zip"):
+                saved.extend(self._extract_submission_archive(upload_dir, upload))
+                continue
 
-            scenario_upload_dir = upload_dir / "scenario"
-
-            if is_xosc:
-                current_upload_dir = scenario_upload_dir
-                file_type = "scenario"
-            else:
-                current_upload_dir = upload_dir
-                file_type = "model"
-
-            # 2. 确保目标目录存在（特别是新建的 scenario 子目录）
-            current_upload_dir.mkdir(parents=True, exist_ok=True)
-
-            # 3. 处理重名冲突
-            target = current_upload_dir / filename
-            if target.exists():
-                stem = target.stem
-                suffix = target.suffix
-                target = current_upload_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
-
-            # 4. 执行保存
-            upload.save(target)
-
-            # 5. 组装返回的 JSON 信息，添加 file_type 标识符
             saved.append(
-                {
-                    "field_name": getattr(upload, "name", ""),
-                    "original_filename": upload.filename,
-                    "stored_filename": target.name,
-                    "file_type": file_type,  # 文件标识符: 'scenario' 或 'model'
-                    "relative_path": str(
-                        target.relative_to(self.config["TASK_DATA_ROOT"])
-                    ),
-                }
+                self._save_regular_upload(
+                    upload_dir=upload_dir,
+                    upload=upload,
+                    filename=filename,
+                )
             )
         return saved
+
+    def _save_regular_upload(
+        self, *, upload_dir: Path, upload: Any, filename: str
+    ) -> dict[str, Any]:
+        is_xosc = filename.lower().endswith(".xosc")
+        current_upload_dir = upload_dir / "scenario" if is_xosc else upload_dir
+        file_type = "scenario" if is_xosc else "model"
+        current_upload_dir.mkdir(parents=True, exist_ok=True)
+
+        target = current_upload_dir / filename
+        if target.exists():
+            stem = target.stem
+            suffix = target.suffix
+            target = current_upload_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+
+        upload.save(target)
+        return {
+            "field_name": getattr(upload, "name", ""),
+            "original_filename": upload.filename,
+            "stored_filename": target.name,
+            "file_type": file_type,
+            "relative_path": str(target.relative_to(self.config["TASK_DATA_ROOT"])),
+        }
+
+    def _extract_submission_archive(
+        self, upload_dir: Path, upload: Any
+    ) -> list[dict[str, Any]]:
+        archive_name = secure_filename(upload.filename or "submission.zip")
+        if not archive_name.lower().endswith(".zip"):
+            archive_name = f"{archive_name}.zip"
+
+        archive_target = upload_dir / archive_name
+        if archive_target.exists():
+            stem = archive_target.stem
+            suffix = archive_target.suffix
+            archive_target = upload_dir / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+
+        upload.save(archive_target)
+
+        saved: list[dict[str, Any]] = []
+        has_model = False
+        has_scenario = False
+        try:
+            with zipfile.ZipFile(archive_target, "r") as zf:
+                for info in sorted(zf.infolist(), key=lambda item: item.filename):
+                    if info.is_dir():
+                        continue
+
+                    rel_path = self._normalize_submission_member(info.filename)
+                    file_type = self._classify_submission_member(rel_path)
+                    target = upload_dir / rel_path.as_posix()
+                    target.parent.mkdir(parents=True, exist_ok=True)
+
+                    with zf.open(info, "r") as source, open(target, "wb") as dest:
+                        shutil.copyfileobj(source, dest)
+
+                    if file_type == "model":
+                        has_model = True
+                    elif file_type == "scenario":
+                        has_scenario = True
+
+                    saved.append(
+                        {
+                            "field_name": getattr(upload, "name", ""),
+                            "original_filename": info.filename,
+                            "stored_filename": target.name,
+                            "file_type": file_type,
+                            "relative_path": str(
+                                target.relative_to(self.config["TASK_DATA_ROOT"])
+                            ),
+                        }
+                    )
+        except Exception:
+            shutil.rmtree(upload_dir, ignore_errors=True)
+            raise
+
+        if not saved:
+            raise ValueError("Submission archive does not contain any valid files")
+        if not has_model:
+            raise ValueError("Submission archive must contain at least one model.zip")
+        if not has_scenario:
+            raise ValueError("Submission archive must contain scene_sub/*.xosc files")
+
+        return saved
+
+    @staticmethod
+    def _normalize_submission_member(member_name: str) -> PurePosixPath:
+        rel_path = PurePosixPath(member_name)
+        if rel_path.is_absolute():
+            raise ValueError(f"Invalid path in submission archive: {member_name}")
+        if any(part in {"", ".", ".."} for part in rel_path.parts):
+            raise ValueError(f"Invalid path in submission archive: {member_name}")
+        return rel_path
+
+    @staticmethod
+    def _classify_submission_member(rel_path: PurePosixPath) -> str:
+        parts = rel_path.parts
+        if not parts:
+            raise ValueError("Empty path in submission archive")
+
+        if parts[0] == "scene_sub":
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Unexpected nested file in scene_sub: {rel_path.as_posix()}"
+                )
+            if not rel_path.name.endswith("_output.xosc"):
+                raise ValueError(
+                    f"Scene file must end with _output.xosc: {rel_path.as_posix()}"
+                )
+            return "scenario"
+
+        if rel_path.name == "model.zip" and len(parts) >= 2:
+            return "model"
+
+        raise ValueError(
+            f"Unexpected file in submission archive: {rel_path.as_posix()}"
+        )
 
     @staticmethod
     def _write_json(path: Path, data: Any) -> None:
@@ -555,6 +651,9 @@ class TaskService:
             file_type = info["file_type"]
             if file_type != "model":
                 continue
-            return info["relative_path"]
+            relative_path = str(info["relative_path"])
+            normalized = relative_path.replace("\\", "/")
+            if normalized.endswith("tessng_ppo/model.zip"):
+                return relative_path
 
         return ""

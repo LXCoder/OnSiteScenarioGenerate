@@ -86,7 +86,7 @@ gunicorn -c gunicorn.conf.py run:app
 创建任务。支持两种输入方式：
 
 1. `application/json`
-2. `multipart/form-data`，可同时上传文件
+2. `multipart/form-data`，只允许上传一个 `.zip` 压缩包
 
 JSON 请求体示例：
 
@@ -111,7 +111,28 @@ Token: <jwt-token>
 
 `bg_model`: 使用 `/home/dt/workspace/OnSiteScenarioGenerate/tessng_ppo` 下的模型
 
-需要上传模型文件的，请使用表单 `form-data` 发起请求，其他字段和上述的 `json` 字段一样，`bg_model` 可以忽略。
+如果使用文件上传，请提交一个 `submission.zip`，平台会先解压后按目录结构自动识别内容。
+
+提交压缩包结构示例：
+
+```text
+submission.zip
+├── tessng_ppo
+│   └── model.zip
+├── tessng_dqn
+│   └── model.zip
+└── scene_sub
+    ├── scene_0001_output.xosc
+    ├── scene_0002_output.xosc
+    └── ...
+```
+
+其中：
+
+- `model.zip` 用于保存训练后的主车规划决策算法权重
+- `scene_sub` 中存放各测试场景对应的生成结果文件
+- 所有场景文件应以 `_output.xosc` 结尾，并保持与原始场景名称一致
+- 提交压缩包中不应包含无关文件，平台将根据文件结构和命名规则自动加载主车模型与生成场景，并完成仿真运行和综合评价
 
 兼容字段：
 
@@ -153,7 +174,22 @@ Token: <jwt-token>
       "name": "demo-task",
       "batch_items": [...]
     },
-    "uploads": []
+    "uploads": [
+      {
+        "field_name": "file",
+        "original_filename": "tessng_ppo/model.zip",
+        "stored_filename": "model.zip",
+        "file_type": "model",
+        "relative_path": ".../<task_data_root>/task_.../upload/tessng_ppo/model.zip"
+      },
+      {
+        "field_name": "file",
+        "original_filename": "scene_sub/scene_0001_output.xosc",
+        "stored_filename": "scene_0001_output.xosc",
+        "file_type": "scenario",
+        "relative_path": ".../<task_data_root>/task_.../upload/scene_sub/scene_0001_output.xosc"
+      }
+    ]
   }
 }
 ```
@@ -162,7 +198,15 @@ Token: <jwt-token>
 
 ```json
 {
-  "error": "Request must provide batch_items or batch_config"
+  "error": "Submission archive must contain at least one model.zip"
+}
+```
+
+或者：
+
+```json
+{
+  "error": "Submission archive must contain scene_sub/*.xosc files"
 }
 ```
 
