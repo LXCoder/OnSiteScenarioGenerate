@@ -322,6 +322,33 @@ submission.zip
 - `TIMEOUT`
 - `CANCELLED`
 
+## Submit Status
+
+`submit` 表是另一条自动发起仿真的入口。后台会监听 `status = WAITSCORE` 的记录，并把它们转成内部任务继续执行。
+
+状态流转如下：
+
+1. `WAITSCORE`
+2. `QUEUING`
+3. `PULLING`
+4. `TESTING`
+5. `SUCCESS` / `PULL ERROR` / `CONTAINER ERROR` / `EVALUATE ERROR`
+
+处理规则：
+
+- `submitId` 会直接作为内部任务 `task_id`
+- `paperType` 直接决定赛题类型，当前支持 `A / B / C`
+- `resultLink` 是压缩包 `.zip` 的下载链接，后台会先下载再解压
+- 压缩包下载失败时，`status` 会更新为 `PULL ERROR`
+- 任务创建或容器执行失败时，`status` 会更新为 `CONTAINER ERROR`
+- 评价或后处理失败时，`status` 会更新为 `EVALUATE ERROR`
+- 正常完成时，`status` 会更新为 `SUCCESS`
+
+对应的提交压缩包仍沿用当前任务的输入约定：
+
+- `tessng_ppo/model.zip` 作为主车模型
+- `scene_sub/*.xosc` 作为场景结果文件
+
 ## Task storage
 
 Runtime data is stored under `BACKEND_TASK_DATA_ROOT`.

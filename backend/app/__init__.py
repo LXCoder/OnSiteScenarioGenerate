@@ -7,8 +7,11 @@ from .api.tasks import bp as tasks_bp
 from .config import Config
 from .extensions import db
 from .logging_setup import configure_logging
+from .models.submit import Submit
 from .services.task_service import TaskRepository, TaskService
+from .services.submit_service import SubmitRepository, SubmitService
 from .worker.task_worker import TaskWorker
+from .worker.submit_worker import SubmitWorker
 
 
 def create_app(config_object: type[Config] | None = None) -> Flask:
@@ -18,19 +21,27 @@ def create_app(config_object: type[Config] | None = None) -> Flask:
     db.init_app(app)
 
     repository = TaskRepository(app.config)
+    submit_repository = SubmitRepository()
     with app.app_context():
         repository.init_db()
         task_service = TaskService(app.config, repository)
+        submit_service = SubmitService(submit_repository)
         app.logger.info("database initialized")
 
     app.extensions["task_repository"] = repository
     app.extensions["task_service"] = task_service
+    app.extensions["submit_repository"] = submit_repository
+    app.extensions["submit_service"] = submit_service
 
-    worker = TaskWorker(app, app.config, task_service)
+    worker = TaskWorker(app, app.config, task_service, submit_service=submit_service)
     app.extensions["task_worker"] = worker
+    submit_worker = SubmitWorker(app, app.config, task_service, worker, submit_service)
+    app.extensions["submit_worker"] = submit_worker
     if app.config["ENABLE_WORKER"]:
         worker.start()
+        submit_worker.start()
         app.logger.info("task worker started")
+        app.logger.info("submit worker started")
     else:
         app.logger.info("task worker disabled")
 

@@ -22,10 +22,11 @@ class ActiveTask:
 
 
 class TaskWorker:
-    def __init__(self, app, config, task_service):
+    def __init__(self, app, config, task_service, submit_service=None):
         self.app = app
         self.config = config
         self.task_service = task_service
+        self.submit_service = submit_service
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._active_task: ActiveTask | None = None
@@ -81,6 +82,8 @@ class TaskWorker:
                     continue
 
                 self.task_service.mark_running(task_id)
+                if self.submit_service is not None:
+                    self.submit_service.mark_testing(task_id)
                 logger.info("task started: %s", task_id)
 
                 cancel_event = threading.Event()
@@ -105,6 +108,8 @@ class TaskWorker:
                         result.exit_code,
                         result.message,
                     )
+                    if self.submit_service is not None:
+                        self._finalize_submit(task_id, result)
                     logger.info(
                         "task finished: %s status=%s exit_code=%s",
                         task_id,
@@ -119,6 +124,12 @@ class TaskWorker:
                         None,
                         f"Worker failed: {exc}",
                     )
+                    if self.submit_service is not None:
+                        self.submit_service.mark_finished(
+                            task_id,
+                            status="FAILED",
+                            score=None,
+                        )
                 finally:
                     with self._lock:
                         self._active_task = None
@@ -128,3 +139,42 @@ class TaskWorker:
         with open(request_json, "r") as f:
             req_data = json.load(f)
             return req_data.get("uploads", [])
+
+    def _finalize_submit(self, task_id: str, result) -> None:
+        submit = self.submit_service.get_submit(task_id)
+        if not submit:
+            return
+
+        if result.status != "SUCCESS":
+            self.submit_service.mark_finished(
+                task_id,
+                status="FAILED",
+                score=None,
+            )
+            return
+
+        access = AccessContext(
+            user_id=submit["submitterId"],
+            username=submit["submitterId"],
+            is_admin=False,
+        )
+        try:
+            evaluation = self.task_service.get_evaluation_result(task_id, access=access)
+            score = None
+            if evaluation:
+                score = evaluation.get("summary", {}).get("total_100_avg")
+                if score is not None:
+                    score = float(score)
+
+            self.submit_service.mark_finished(
+                task_id,
+                status="SUCCESS",
+                score=score,
+            )
+        except Exception as exc:
+            logger.exception("failed to read evaluation result for submit: %s", task_id)
+            self.submit_service.mark_finished(
+                task_id,
+                status="FAILED",
+                score=None,
+            )

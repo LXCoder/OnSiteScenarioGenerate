@@ -48,6 +48,9 @@ def create_task():
     qname = req_data.get("name") or ""
     bg_model = req_data.get("bg_model", "model.zip.v6")
     is_train = req_data.get("is_train", False)
+    data_dir = f"Data/prod/{TYPE_MAP[qtype]}"
+    if 'A' == TYPE_MAP[qtype]:
+        data_dir = f"{data_dir}/{'train' if is_train else 'test'}"
 
     if not isinstance(qtype, int) or qtype not in TYPE_MAP:
         return jsonify({"error": "不存在对应的类型的赛题"}), 400
@@ -58,7 +61,7 @@ def create_task():
             {
                 "name": qname,
                 "BG_MODEL_FILENAME": bg_model,
-                "DATA_DIR": f"Data/prod/{TYPE_MAP[qtype]}/{'train' if is_train else 'test'}",
+                "DATA_DIR": data_dir,
             }
         ],
     }
